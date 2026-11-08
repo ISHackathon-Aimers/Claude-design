@@ -23,3 +23,21 @@ export async function requireUser(req, { config = publicConfig(), clientFactory 
   if (error || !data.user) throw Object.assign(new Error('로그인이 만료되었습니다. 다시 로그인해 주세요.'), { status: 401 });
   return data.user;
 }
+
+export function userClient(req) {
+  const config = publicConfig();
+  return createClient(config.supabaseUrl, config.supabaseKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: req.headers.authorization } },
+  });
+}
+
+export const handleAuth = Object.assign(async () => false, {
+  getUser: requireUser,
+  isTrustedWrite: async (req) => {
+    if (req.headers['x-requested-with'] !== 'AIMers') return false;
+    if (!req.headers.origin) return true;
+    try { return new URL(req.headers.origin).host === req.headers.host; }
+    catch { return false; }
+  },
+});

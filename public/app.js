@@ -1,15 +1,12 @@
 import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday } from './logic.js';
-import { connectCloud, readState, writeState } from './cloud.bundle.js';
-import { StateSync } from './sync-state.js';
+import { sessionManager } from './session.js';
 
-// Guest demo state stays local. Signed-in state is stored in Supabase.
+// 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
 const auth = { loading: true, enabled: false, user: null, error: '', busy: false };
-const storageKey = () => auth.user ? `${KEY}:supabase:${auth.user.id}` : KEY;
-let cloud = null;
-let sync = null;
-let cloudReady = false;
-let bootError = '';
+const sync = { ready: false, revision: 0, generation: 0, pending: null, saving: null, error: '', conflict: false };
+let legacyState = null;
+let aiRuns = [];
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s = '') => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -75,9 +72,10 @@ function seed() {
   const fillers = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11].map((w, i) =>
     e(w * 7 - 2, '전공공부', study[i], `${study[i]}을(를) 공부했다. 수업 내용을 복습하고 노트에 정리했다.`,
       `${study[i]}을(를) 공부하고 핵심 개념을 노트에 정리했습니다.`, i % 3 ? ['전공 역량'] : ['전공 역량', '성실성']));
-  const member = (name, color, isPublic, doneNow, streak, entries) => ({
-    id: uid(), name, color, public: isPublic, periodDays: 7, startDate: start,
-    lastEntryDate: ago(doneNow ? 0 : 3), streak, entries: entries.map(([d, category, title, summary]) => ({ id: uid(), date: ago(d), category, title, summary, tags: [] })),
+  // 멤버마다 기록 주기(days)와 시작일이 다르다. 완료 여부는 각자의 이번 기간에 마지막 기록(lastAgo일 전)이 들어 있는지로 정해진다.
+  const member = (name, color, isPublic, { days, startAgo, lastAgo }, streak, entries) => ({
+    id: uid(), name, color, public: isPublic, periodDays: days, startDate: ago(startAgo),
+    lastEntryDate: ago(lastAgo), streak, entries: entries.map(([d, category, title, summary]) => ({ id: uid(), date: ago(d), category, title, summary, tags: [] })),
   });
   return {
     v: 1,
@@ -88,18 +86,18 @@ function seed() {
       {
         id: uid(), name: '정보시스템학과 24학번', code: 'IS24AM',
         members: [
-          member('이지민', '#7c3aed', true, true, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.'], [9, '전공공부', '경영정보시스템 중간고사', 'ERP 개념을 정리하며 중간고사를 준비했습니다.']]),
-          member('박서연', '#0891b2', true, false, 4, [[3, '프로젝트', '앱 프로젝트 UI 설계', '팀 앱 프로젝트에서 피그마로 화면 6개를 설계했습니다.']]),
-          member('최도윤', '#ca8a04', true, true, 22, [[0, '대외활동', '빅데이터 교육 수료', '8주 빅데이터 교육을 수료하고 미니 프로젝트를 발표했습니다.'], [7, '동아리', '밴드 동아리 공연', '공연 기획에서 무대 순서 조율을 맡았습니다.']]),
-          member('정하준', '#16a34a', false, false, 0, [[30, '전공공부', '회계원리 복습', '회계원리 분개를 복습했습니다.']]),
-          member('한유나', '#db2777', true, false, 8, [[3, '대외활동', '봉사활동 기획', '지역아동센터 코딩 교실 커리큘럼을 짰습니다.']]),
+          member('이지민', '#7c3aed', true, { days: 7, startAgo: 420, lastAgo: 0 }, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.'], [9, '전공공부', '경영정보시스템 중간고사', 'ERP 개념을 정리하며 중간고사를 준비했습니다.']]),
+          member('박서연', '#0891b2', true, { days: 14, startAgo: 424, lastAgo: 6 }, 4, [[6, '프로젝트', '앱 프로젝트 UI 설계', '팀 앱 프로젝트에서 피그마로 화면 6개를 설계했습니다.']]),
+          member('최도윤', '#ca8a04', true, { days: 7, startAgo: 423, lastAgo: 1 }, 22, [[1, '대외활동', '빅데이터 교육 수료', '8주 빅데이터 교육을 수료하고 미니 프로젝트를 발표했습니다.'], [8, '동아리', '밴드 동아리 공연', '공연 기획에서 무대 순서 조율을 맡았습니다.']]),
+          member('정하준', '#16a34a', false, { days: 30, startAgo: 445, lastAgo: 30 }, 0, [[30, '전공공부', '회계원리 복습', '회계원리 분개를 복습했습니다.']]),
+          member('한유나', '#db2777', true, { days: 7, startAgo: 426, lastAgo: 8 }, 8, [[8, '대외활동', '봉사활동 기획', '지역아동센터 코딩 교실 커리큘럼을 짰습니다.']]),
         ],
       },
       {
         id: uid(), name: '데이터 공모전 팀', code: 'DATA4U',
         members: [
-          member('이지민', '#7c3aed', true, true, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.']]),
-          member('오세훈', '#ea580c', true, false, 2, [[4, '프로젝트', '시각화 대시보드', '공모전 결과를 대시보드로 만들었습니다.']]),
+          member('이지민', '#7c3aed', true, { days: 7, startAgo: 420, lastAgo: 0 }, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.']]),
+          member('오세훈', '#ea580c', true, { days: 14, startAgo: 430, lastAgo: 12 }, 2, [[12, '프로젝트', '시각화 대시보드', '공모전 결과를 대시보드로 만들었습니다.']]),
         ],
       },
     ],
@@ -108,33 +106,84 @@ function seed() {
   };
 }
 
-function load() {
-  try {
-    const s = JSON.parse(localStorage.getItem(storageKey()));
-    if (s?.v === 1) return s;
-  } catch { /* 저장소를 못 쓰면 시연 데이터로 시작 */ }
-  return initialState();
-}
 function initialState() {
   const s = seed();
   if (auth.user) {
     s.profile.name = auth.user.name.slice(0, 20);
     s.profile.bio = '';
     s.profile.startDate = todayStr();
+    s.profile.public = false;
     s.entries = [];
     s.groups = [];
   }
   return s;
 }
-function save() {
-  if (auth.user) {
-    if (cloudReady && sync) sync.queue(S);
-    return;
-  }
-  try { localStorage.setItem(storageKey(), JSON.stringify(S)); } catch { toast('저장 공간이 부족해 저장하지 못했어요.'); }
+async function api(url, { method = 'GET', body } = {}) {
+  const res = await fetch(url, { method,
+    headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user?.id || '', ...await sessionManager.headers() },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const data = await res.json().catch(() => ({ error: '서버 응답을 읽지 못했어요.' }));
+  if (!res.ok) throw Object.assign(new Error(data.error || '요청에 실패했어요.'), { status: res.status });
+  return data;
 }
 
-let S = load();
+function renderSync() {
+  const el = $('#save-status');
+  if (!el) return;
+  el.innerHTML = sync.error ? `<p class="error">${esc(sync.error)}</p><div class="inline">
+    <button class="btn small secondary" data-act="export-data">변경 내용 내보내기</button>
+    ${sync.conflict ? '<button class="btn small secondary" data-act="reload-data">서버 내용 다시 불러오기</button>' : '<button class="btn small secondary" data-act="retry-save">저장 재시도</button>'}</div>`
+    : auth.user ? (sync.saving || sync.pending ? '서버에 저장 중...' : sync.ready ? '서버에 저장됨' : '')
+    : '시연 화면입니다. 기록을 저장하려면 로그인해 주세요.';
+}
+
+function save() {
+  if (!auth.user) return Promise.resolve(true);
+  if (!sync.ready) return Promise.resolve(false);
+  sync.generation++;
+  sync.pending = JSON.parse(JSON.stringify({ v: S.v, profile: S.profile, entries: S.entries, categories: S.categories, lastNotified: S.lastNotified }));
+  return flushSave();
+}
+
+function flushSave() {
+  if (sync.saving) return sync.saving;
+  if (sync.conflict) return Promise.resolve(false);
+  sync.saving = (async () => {
+    while (sync.pending) {
+      const snapshot = sync.pending;
+      sync.pending = null;
+      try {
+        const result = await api('/api/state', { method: 'PUT', body: { revision: sync.revision, state: snapshot } });
+        sync.revision = result.revision;
+        sync.error = '';
+      } catch (e) {
+        sync.pending ||= snapshot;
+        sync.conflict = e.status === 409;
+        sync.error = e.status === 401 ? '로그인이 만료되어 저장하지 못했어요. 변경 내용을 내보낸 뒤 다시 로그인해 주세요.'
+          : e.message || '저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+        return false;
+      }
+    }
+    return true;
+  })().finally(() => { sync.saving = null; renderSync(); });
+  renderSync();
+  return sync.saving;
+}
+
+async function refreshData() {
+  if (sync.pending || sync.saving) { if (!await flushSave()) throw new Error('저장하지 못한 변경 내용을 먼저 확인해 주세요.'); }
+  const generation = sync.generation;
+  const data = await api('/api/state');
+  if (generation === sync.generation && data.revision >= sync.revision && !sync.pending && !sync.saving) {
+    S = data.state; sync.revision = data.revision;
+  } else {
+    S.groups = data.state.groups; S.pokes = data.state.pokes; S.notifications = data.state.notifications;
+  }
+  sync.ready = true;
+  renderSync();
+}
+
+let S = seed();
 const ui = {
   sort: 'time', cat: 'all', demo: false, newGroup: false,
   rec: null,
@@ -154,15 +203,10 @@ function toast(msg) {
 }
 
 async function ai(task, input) {
+  if (!auth.user) throw new Error('AI 기능을 사용하려면 Google로 로그인해 주세요.');
   let res;
   try {
-    const headers = { 'content-type': 'application/json' };
-    if (cloud && auth.user) {
-      const { data, error } = await cloud.auth.getSession();
-      if (error || !data.session) throw new Error('다시 로그인해 주세요.');
-      headers.authorization = `Bearer ${data.session.access_token}`;
-    }
-    res = await fetch('/api/ai', { method: 'POST', headers, body: JSON.stringify({ task, input }) });
+    res = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id, ...await sessionManager.headers() }, body: JSON.stringify({ task, input }) });
   } catch {
     throw new Error('서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.');
   }
@@ -170,6 +214,7 @@ async function ai(task, input) {
   if (!res.ok || body.error) throw new Error(body.error || '요청에 실패했어요.');
   if (body.demo && !ui.demo) { ui.demo = true; renderTop(); }
   if (body.note) toast(body.note);
+  try { aiRuns = (await api('/api/ai/history')).runs; } catch { /* AI 결과는 전달하고 활동 목록은 다음 로드에서 다시 읽는다. */ }
   return body.data;
 }
 
@@ -182,25 +227,38 @@ function myStats() {
   const [ps, pe] = periodRange(Math.max(info.current, 0), p.startDate, p.periodDays);
   return { ...info, ps, pe, left: info.current < 0 ? 0 : daysLeft(today, p.startDate, p.periodDays) };
 }
+// 그룹 규칙: 멤버마다 자기 작성 주기·시작일로 '이번 기간'을 따로 계산한다. 그 기간에 기록이 없으면 미작성(콕 찌르기 대상).
+const PERIOD_NAMES = { 7: '매주', 14: '2주마다', 30: '한 달마다' };
+const periodName = (d) => PERIOD_NAMES[d] || `${d}일마다`;
 function memberStatus(m) {
-  if (m.me) { const s = myStats(); return { done: s.doneNow, streak: s.streak }; }
-  const cur = periodIndex(todayStr(), m.startDate, m.periodDays);
-  return { done: periodIndex(m.lastEntryDate, m.startDate, m.periodDays) === cur, streak: m.streak };
+  if (m.me) { const s = myStats(); return { done: s.doneNow, streak: s.streak, left: s.left, days: S.profile.periodDays }; }
+  const today = todayStr();
+  const days = m.periodDays || 7;
+  const left = m.startDate ? daysLeft(today, m.startDate, days) : null;
+  if (typeof m.doneNow === 'boolean') return { done: m.doneNow, streak: m.streak, left, days }; // 실제 멤버: 서버가 각자 기간으로 계산
+  const cur = periodIndex(today, m.startDate, days);
+  return { done: periodIndex(m.lastEntryDate, m.startDate, days) === cur, streak: m.streak, left, days };
 }
 const me = () => ({ id: 'me', me: true, name: S.profile.name, color: '#e11d48', photo: S.profile.photo, public: S.profile.public });
 const avatar = (m) => `<span class="avatar" style="background:${esc(m.color)}">${m.photo ? `<img src="${m.photo}" alt="">` : esc((m.name || '?').slice(0, 1))}</span>`;
+// 연속 기록이 10회·20회를 넘으면 프로필에 불꽃 테두리와 연속 횟수 배지가 붙는다
+function fireRing(m, streak, cls = '') {
+  const lvl = fireLevel(streak);
+  const badge = lvl ? `<span class="fire-badge" aria-hidden="true">${icon('flame', 12)}${cls === 'sm' ? '' : streak}</span>` : '';
+  return `<span class="ring ${cls} fire-${lvl}">${avatar(m)}${badge}</span>`;
+}
 const durationText = (periods, len) => {
   const days = periods * len;
   return len % 30 === 0 ? `${periods * (len / 30)}개월` : `${Math.round(days / 7)}주`;
 };
 
-function entryCard(e, owner = true) {
+function entryCard(e, owner = true, open = false) {
   return `<article class="card entry">
     <div class="entry-meta"><span class="tag-cat">#${esc(e.category)}</span><time datetime="${e.date}">${fmt(e.date)}</time></div>
     <h3>${esc(e.title)}</h3>
     <p>${esc(e.summary)}</p>
     ${e.tags?.length ? `<ul class="tags" aria-label="역량">${e.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
-    ${e.raw ? `<details><summary>원본 보기</summary><div class="raw">
+    ${e.raw ? `<details ${open ? 'open' : ''}><summary>원본 보기</summary><div class="raw">
       <p class="pre">${esc(e.raw)}</p>
       ${(e.qa || []).map((x) => `<p class="qa-q">Q. ${esc(x.q)}</p><p class="pre">${x.a ? esc(x.a) : '<span class="muted">(답변 없음)</span>'}</p>`).join('')}
     </div></details>` : ''}
@@ -242,15 +300,35 @@ function dashboard() {
   const first = S.entries.map((e) => e.date).sort()[0];
   const spanDays = first ? toDay(todayStr()) - toDay(first) : 0;
   const span = spanDays >= 60 ? `${Math.floor(spanDays / 30)}개월` : `${Math.max(1, Math.ceil(spanDays / 7))}주`;
+  const head = (title, href) => `<div class="list-head"><h2>${title}</h2><a class="more" href="${href}">전체 보기 ${icon('next', 16)}</a></div>`;
 
-  const cats = [...new Set([...S.categories, ...S.entries.map((e) => e.category)])];
-  const shown = S.entries.filter((e) => ui.cat === 'all' || e.category === ui.cat).sort((a, b) => b.date.localeCompare(a.date));
-  let list;
-  if (!S.entries.length) list = `<div class="empty"><p>아직 기록이 없어요.<br>첫 한 걸음을 남겨 보세요.</p></div>`;
-  else if (!shown.length) list = '<p class="empty">이 카테고리의 기록이 없어요.</p>';
-  else if (ui.sort === 'cat') list = cats.filter((c) => shown.some((e) => e.category === c))
-    .map((c) => `<h3 class="group-label">#${esc(c)} · ${shown.filter((e) => e.category === c).length}개</h3>${shown.filter((e) => e.category === c).map((e) => entryCard(e)).join('')}`).join('');
-  else list = shown.map((e) => entryCard(e)).join('');
+  // 나의 기록 미리보기: 최근 3개
+  const recent = [...S.entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
+  const recordsBox = `<section class="card">${head('나의 기록', '#/records')}
+    ${recent.length ? `<ul class="mini-list">${recent.map((e) => `<li><a class="mini-row" href="#/entry/${e.id}">
+      <span class="mini-main"><span class="tag-cat">#${esc(e.category)}</span><strong>${esc(e.title)}</strong></span>
+      <time datetime="${e.date}">${fmtMD(e.date)}</time></a></li>`).join('')}</ul>` : '<p class="muted">아직 기록이 없어요. 첫 한 걸음을 남겨 보세요.</p>'}
+  </section>`;
+
+  // AIMers+ 미리보기: 가장 많이 쌓인 역량 한 줄 + 바로 가기
+  const counts = axisCounts(S.entries);
+  const topAxis = AXES[counts.indexOf(Math.max(...counts))];
+  const tile = (href, ic, label) => `<a class="tile" href="${href}"><span class="nav-ic">${icon(ic, 22)}</span><span>${label}</span></a>`;
+  const servicesBox = `<section class="card">${head('AIMers+', '#/services')}
+    ${S.entries.length ? `<p class="help">지금까지 가장 많이 쌓인 역량은 <strong class="hl">${topAxis.key}</strong>이에요.</p>` : ''}
+    <div class="tiles">${tile('#/services/interview', 'chat', '면접 예상 질문')}${tile('#/services/match', 'search', '자소서 경험 검색')}${tile('#/services/insight', 'trend', '성장 인사이트')}</div>
+  </section>`;
+
+  // 내 그룹 미리보기: 그룹별 이번 기간 작성 현황
+  const groupsBox = `<section class="card">${head('내 그룹', '#/groups')}
+    ${S.groups.length ? `<ul class="mini-list">${S.groups.map((g) => {
+      const ms = groupMembers(g);
+      const late = ms.filter((m) => !memberStatus(m).done).length;
+      return `<li><a class="mini-row" href="#/groups/${g.id}"><span class="mini-main"><strong>${esc(g.name)}</strong>
+        <small>이번 기간 ${ms.length - late}/${ms.length}명 기록</small></span>
+        ${late ? `<span class="late-badge">미작성 ${late}명</span>` : `<span class="ok-badge">${icon('check', 14)} 모두 완료</span>`}</a></li>`;
+    }).join('')}</ul>` : '<p class="muted">아직 속한 그룹이 없어요.</p>'}
+  </section>`;
 
   return {
     html: `${status}
@@ -259,18 +337,40 @@ function dashboard() {
       <div><strong>${span}</strong><span>기록한 기간</span></div>
       <div><strong>${s.streak}회</strong><span>연속 기록</span></div>
     </section>
-    <section style="display:grid;gap:12px" aria-labelledby="my-records">
-      <div class="list-head"><h2 id="my-records">내 기록</h2>
-        <div class="seg" role="group" aria-label="정렬 방식">
-          <button data-act="sort" data-v="time" aria-pressed="${ui.sort === 'time'}">시간순</button>
-          <button data-act="sort" data-v="cat" aria-pressed="${ui.sort === 'cat'}">카테고리순</button>
-        </div>
-      </div>
-      <div class="chips" role="group" aria-label="카테고리 필터">
-        ${['all', ...cats].map((c) => `<button class="chip" data-act="cat" data-v="${esc(c)}" aria-pressed="${ui.cat === c}">${c === 'all' ? '전체' : `#${esc(c)}`}</button>`).join('')}
-      </div>
-      ${list}
-    </section>`,
+    ${recordsBox}${servicesBox}${groupsBox}`,
+  };
+}
+
+// ───────── 2번 탭: 내 기록 ─────────
+function records() {
+  const cats = [...new Set([...S.categories, ...S.entries.map((e) => e.category)])];
+  const shown = S.entries.filter((e) => ui.cat === 'all' || e.category === ui.cat).sort((a, b) => b.date.localeCompare(a.date));
+  let list;
+  if (!S.entries.length) list = `<div class="empty"><p>아직 기록이 없어요.<br>첫 한 걸음을 남겨 보세요.</p></div>`;
+  else if (!shown.length) list = '<p class="empty">이 카테고리의 기록이 없어요.</p>';
+  else if (ui.sort === 'cat') list = cats.filter((c) => shown.some((e) => e.category === c))
+    .map((c) => `<h3 class="group-label">#${esc(c)} · ${shown.filter((e) => e.category === c).length}개</h3>${shown.filter((e) => e.category === c).map((e) => entryCard(e)).join('')}`).join('');
+  else list = shown.map((e) => entryCard(e)).join('');
+  return {
+    html: `<div class="list-head"><p class="lead">총 ${S.entries.length}개의 경험을 기록했어요.</p>
+      <button class="btn small primary" data-act="record">${icon('plus', 18)} 기록하기</button></div>
+    <div class="list-head"><div class="seg" role="group" aria-label="정렬 방식">
+        <button data-act="sort" data-v="time" aria-pressed="${ui.sort === 'time'}">시간순</button>
+        <button data-act="sort" data-v="cat" aria-pressed="${ui.sort === 'cat'}">카테고리순</button>
+      </div></div>
+    <div class="chips" role="group" aria-label="카테고리 필터">
+      ${['all', ...cats].map((c) => `<button class="chip" data-act="cat" data-v="${esc(c)}" aria-pressed="${ui.cat === c}">${c === 'all' ? '전체' : `#${esc(c)}`}</button>`).join('')}
+    </div>
+    ${list}`,
+  };
+}
+
+// 기록 하나를 크게 보기 (추천 경험·대시보드에서 눌러 들어온다)
+function entryView(id) {
+  const e = S.entries.find((x) => x.id === id);
+  return {
+    title: '기록 보기', back: 'history',
+    html: e ? entryCard(e, true, true) : '<p class="empty">기록을 찾을 수 없어요. 삭제되었을 수 있어요.</p>',
   };
 }
 
@@ -313,7 +413,7 @@ function renderSheet() {
       <div class="field"><label for="d-title">제목</label><input id="d-title" maxlength="60" data-model="rec.draft.title" value="${esc(d.title)}"></div>
       <div class="field"><label for="d-summary">요약</label><textarea id="d-summary" rows="5" maxlength="600" data-model="rec.draft.summary">${esc(d.summary)}</textarea></div>
       ${d.tags.length ? `<div class="field"><span class="eyebrow">드러난 역량</span><ul class="tags">${d.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}${err}`;
-    foot = `<button class="btn secondary" data-act="rec-back">이전</button><button class="btn primary" data-act="rec-save">${icon('check')} 저장하기</button>`;
+    foot = `<button class="btn secondary" data-act="rec-back" ${r.loading ? 'disabled' : ''}>이전</button><button class="btn primary" data-act="rec-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 저장하기`}</button>`;
   }
   $('#sheet').innerHTML = `${head('경험 기록하기')}<div class="sheet-body">${body}</div><footer class="sheet-foot">${foot}</footer>`;
 }
@@ -329,16 +429,33 @@ async function summarize() {
   r.loading = false; renderSheet();
 }
 
-// ───────── 2번 탭: 부가 서비스 ─────────
+// ───────── 4번 탭: AIMers+ (기록을 활용하는 AI 서비스) ─────────
 const needEntries = () => (S.entries.length ? '' : `<div class="card empty"><p>먼저 경험을 기록해 주세요.</p><a class="btn primary" href="#/dashboard">기록하러 가기</a></div>`);
 
 function services() {
-  const item = (href, ic, title, desc) => `<a class="card nav-card" href="${href}"><span class="nav-ic">${icon(ic, 24)}</span><span><strong>${title}</strong><small>${desc}</small></span>${icon('next')}</a>`;
+  const n = S.entries.length;
+  const counts = axisCounts(S.entries);
+  const top = n ? AXES[counts.indexOf(Math.max(...counts))].key : '';
+  const svc = (href, ic, title, desc, steps, stat) => `<a class="card svc" href="${href}">
+    <span class="svc-head"><span class="nav-ic">${icon(ic, 24)}</span><strong>${title}</strong>${icon('next')}</span>
+    <span class="svc-desc">${desc}</span>
+    <ol class="svc-steps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol>
+    ${stat ? `<span class="svc-stat">${stat}</span>` : ''}</a>`;
   return {
-    html: `<p class="lead">지금까지 쌓은 ${S.entries.length}개의 기록으로 자소서와 면접을 준비해요.</p>
-    ${item('#/services/interview', 'chat', '면접 예상 질문', '내 경험으로 만든 질문에 답하고 피드백 받기')}
-    ${item('#/services/match', 'search', '자소서 문항 관련 경험 검색', '문항을 넣으면 가장 맞는 경험 찾기')}
-    ${item('#/services/insight', 'trend', '성장 인사이트', '학기별 활동과 달라진 점 한눈에 보기')}`,
+    html: `<section class="card plus-hero">
+      <span class="eyebrow">AIMers+</span>
+      <h2>쌓아 둔 기록을 취업 준비로</h2>
+      <p class="muted">지금까지 기록한 ${n}개의 경험을 AI가 읽고, 면접 연습과 자기소개서, 성장 정리에 바로 쓸 수 있게 도와줘요. 모든 결과는 내 기록에 적힌 내용만 근거로 해요.</p>
+    </section>
+    ${svc('#/services/interview', 'chat', '면접 예상 질문',
+      '내 기록을 바탕으로 실제 면접관이 물어볼 만한 질문을 만들어요. 답변을 쓰면 잘한 점과 보완할 점을 알려 줘요.',
+      ['카테고리나 역량 고르기', '질문을 골라 답변 쓰기', 'AI 피드백 확인하기'], n ? `연습할 수 있는 기록 ${n}개` : '')}
+    ${svc('#/services/match', 'search', '자소서 문항 관련 경험 검색',
+      '자기소개서 문항을 붙여 넣으면 쓰기 좋은 경험을 기록 속 실제 문장과 함께 찾아 줘요. 기록에 없는 내용은 지어내지 않아요.',
+      ['문항 붙여 넣기', '추천 경험과 근거 문장 확인', '눌러서 기록 전체 보기'], n ? `검색할 수 있는 기록 ${n}개` : '')}
+    ${svc('#/services/insight', 'trend', '성장 인사이트',
+      '학기별로 어떤 활동을 했는지 정리하고, 역량 육각형으로 어떤 능력이 자랐는지 한눈에 보여 줘요.',
+      ['역량 육각형 보기', '학기별 연대기 살펴보기', 'AI 성장 보고서 받기'], top ? `가장 많이 쌓인 역량: ${top}` : '')}`,
   };
 }
 
@@ -396,9 +513,11 @@ function match() {
     </section>
     ${m.results ? (m.results.length ? `<h2>추천 경험 ${m.results.length}개</h2>${m.results.map((r, i) => {
       const e = S.entries.find((en) => en.id === r.id);
-      return e ? `<article class="card"><span class="eyebrow">추천 ${i + 1} · #${esc(e.category)} · ${fmtW(e.date)}</span><h3>${esc(e.title)}</h3>
+      return e ? `<a class="card match-card" href="#/entry/${e.id}" aria-label="추천 ${i + 1}: ${esc(e.title)} 기록 보기">
+        <span class="eyebrow">추천 ${i + 1} · #${esc(e.category)} · ${fmtW(e.date)}</span><h3>${esc(e.title)}</h3>
         <blockquote class="evidence"><span class="eyebrow">기록 속 근거</span><p>“${esc(r.evidence)}”</p></blockquote>
-        ${r.reason ? `<p class="ai-summary"><strong>추천 이유</strong><br>${esc(r.reason)}</p>` : ''}${r.angle ? `<p class="tip">${esc(r.angle)}</p>` : ''}</article>` : '';
+        ${r.reason ? `<p class="ai-summary"><strong>추천 이유</strong><br>${esc(r.reason)}</p>` : ''}${r.angle ? `<p class="tip">${esc(r.angle)}</p>` : ''}
+        <span class="more">기록 전체 보기 ${icon('next', 16)}</span></a>` : '';
     }).join('')}` : '<p class="empty">이 문항에 근거로 쓸 만한 기록을 찾지 못했어요.<br>관련 경험을 먼저 기록하거나 문항을 바꿔 보세요.</p>') : ''}`,
   };
 }
@@ -413,6 +532,65 @@ function semesters() {
   return [...map.values()];
 }
 
+// 역량 육각형: 기록에 붙은 역량 태그 8개를 6개 축으로 묶는다
+const AXES = [
+  { key: '전공 역량', tags: ['전공 역량'] },
+  { key: '문제 해결', tags: ['문제 해결'] },
+  { key: '협업', tags: ['협업', '갈등 조율'] },
+  { key: '리더십', tags: ['리더십'] },
+  { key: '소통', tags: ['커뮤니케이션'] },
+  { key: '자기주도', tags: ['도전', '성실성'] },
+];
+const axisCounts = (entries) => AXES.map((a) => entries.filter((e) => (e.tags || []).some((t) => a.tags.includes(t))).length);
+
+function radarSvg(now, past) {
+  const cx = 170;
+  const cy = 150;
+  const R = 92;
+  const max = Math.max(1, ...now);
+  const pt = (i, r) => {
+    const a = (-90 + i * 60) * (Math.PI / 180);
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  };
+  const poly = (vals) => vals.map((v, i) => pt(i, (v / max) * R).map((n) => n.toFixed(1)).join(',')).join(' ');
+  const rings = [0.25, 0.5, 0.75, 1].map((f) => `<polygon points="${AXES.map((_, i) => pt(i, R * f).join(',')).join(' ')}" class="r-grid"/>`).join('');
+  const spokes = AXES.map((_, i) => { const [x, y] = pt(i, R); return `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" class="r-grid"/>`; }).join('');
+  const labels = AXES.map((a, i) => {
+    const [x, y] = pt(i, R + 22);
+    const anchor = Math.abs(x - cx) < 4 ? 'middle' : x > cx ? 'start' : 'end';
+    const dy = y < cy - R ? -4 : y > cy + R ? 12 : 4;
+    return `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" text-anchor="${anchor}" class="r-label">${a.key}<tspan class="r-val"> ${now[i]}</tspan></text>`;
+  }).join('');
+  const dots = now.map((v, i) => {
+    const [x, y] = pt(i, (v / max) * R);
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" class="r-dot"><title>${AXES[i].key}: 지금 ${v}개${past ? ` · 지난 학기까지 ${past[i]}개` : ''}</title></circle>`;
+  }).join('');
+  return `<svg viewBox="0 0 340 300" class="radar" role="img" aria-label="역량 육각형 그래프. ${AXES.map((a, i) => `${a.key} ${now[i]}개`).join(', ')}">
+    ${rings}${spokes}
+    ${past ? `<polygon points="${poly(past)}" class="r-past"/>` : ''}
+    <polygon points="${poly(now)}" class="r-now"/>${dots}${labels}</svg>`;
+}
+
+function radarCard(sems) {
+  if (!S.entries.length) return '';
+  const now = axisCounts(S.entries);
+  const before = sems.length > 1 ? S.entries.filter((e) => semesterOf(e.date).key !== sems.at(-1).key) : null;
+  const past = before ? axisCounts(before) : null;
+  const diff = past ? now.map((v, i) => v - past[i]) : null;
+  const best = diff && Math.max(...diff) > 0 ? diff.indexOf(Math.max(...diff)) : -1;
+  return `<section class="card">
+    <h2>나의 역량 육각형</h2>
+    <p class="help">기록마다 붙은 역량을 6가지로 묶어 센 거예요. 바깥으로 넓을수록 그 역량을 보여 주는 경험이 많아요.</p>
+    ${best >= 0 ? `<p class="ai-summary">이번 학기에 가장 많이 자란 역량은 <strong>${AXES[best].key}</strong>예요. 경험 ${diff[best]}개가 새로 쌓였어요.</p>` : ''}
+    ${past ? `<div class="legend" aria-hidden="true"><span><i class="sw now"></i>지금</span><span><i class="sw past"></i>지난 학기까지</span></div>` : ''}
+    ${radarSvg(now, past)}
+    <table class="r-table"><caption class="sr-only">역량별 경험 수</caption>
+      <thead><tr><th scope="col">역량</th><th scope="col">경험</th>${past ? '<th scope="col">이번 학기</th>' : ''}</tr></thead>
+      <tbody>${AXES.map((a, i) => `<tr><th scope="row">${a.key}</th><td>${now[i]}개</td>${past ? `<td class="${diff[i] > 0 ? 'up' : ''}">${diff[i] > 0 ? `+${diff[i]}` : '–'}</td>` : ''}</tr>`).join('')}</tbody>
+    </table>
+  </section>`;
+}
+
 function insight() {
   const sems = semesters();
   const max = Math.max(1, ...sems.map((s) => s.entries.length));
@@ -420,7 +598,7 @@ function insight() {
   const count = (arr) => Object.entries(arr.reduce((m, x) => ((m[x] = (m[x] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]);
   return {
     title: '성장 인사이트', back: '#/services',
-    html: needEntries() || `<section class="card"><h2>나의 대학생활 연대기</h2>
+    html: needEntries() || `${radarCard(sems)}<section class="card"><h2>나의 대학생활 연대기</h2>
       <p class="help">${sems.length}개 학기 동안 ${S.entries.length}개의 경험을 기록했어요.</p>
       <button class="btn primary block" data-act="ins-run" ${ui.insight.loading ? 'disabled' : ''}>${ui.insight.loading ? `${spinner} 분석하는 중…` : `${icon('sparkle')} AI 성장 보고서 받기`}</button></section>
     ${d ? `<section class="card" aria-live="polite"><h2>달라진 점</h2><ul style="margin:0;padding-left:20px;display:grid;gap:6px">${d.growth.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>${d.next_step ? `<p class="tip">${esc(d.next_step)}</p>` : ''}</section>` : ''}
@@ -447,6 +625,8 @@ function groupMembers(g) { return [me(), ...g.members]; }
 function groups() {
   return {
     html: `<p class="lead">친구들과 함께 기록하면 포기하지 않고 이어 갈 수 있어요.</p>
+    ${S.notifications?.length ? `<section class="card"><h2>받은 알림</h2>${S.notifications.map((n) => `<p>${esc(n.senderName)}님이 ${esc(n.groupName)} 그룹에서 기록을 기다리고 있어요.</p>`).join('')}
+      <button class="btn secondary" data-act="read-notifications">알림 읽음 처리</button></section>` : ''}
     ${S.groups.map((g) => {
       const ms = groupMembers(g);
       const done = ms.filter((m) => memberStatus(m).done).length;
@@ -457,7 +637,8 @@ function groups() {
     ${ui.newGroup
       ? `<form class="card" data-form="new-group"><div class="field"><label for="g-name">그룹 이름</label><input id="g-name" name="label" maxlength="20" required placeholder="예: 24학번 동기들" autocomplete="off"></div>
         <div class="inline"><button type="button" class="btn secondary" data-act="cancel-group">취소</button><button class="btn primary" style="flex:1">만들기</button></div></form>`
-      : `<button class="btn secondary block" data-act="new-group">${icon('plus')} 새 그룹 만들기</button>`}`,
+      : `<button class="btn secondary block" data-act="new-group">${icon('plus')} 새 그룹 만들기</button>`}
+    ${auth.user ? '<form class="card" data-form="join-group"><div class="field"><label for="invite-code">그룹 초대 코드</label><input id="invite-code" name="code" maxlength="20" required autocomplete="off"></div><button class="btn secondary">그룹 참여하기</button></form>' : ''}`,
   };
 }
 
@@ -467,19 +648,21 @@ function groupDetail(g) {
   return {
     title: g.name, back: '#/groups',
     html: `<section class="card">
-      <div class="group-head"><span class="eyebrow">이번 기록 기간</span><button class="chip" data-act="copy" data-v="${esc(g.code)}">${icon('copy', 16)} 초대 코드 ${esc(g.code)}</button></div>
-      <p><strong>${ms.length}명 중 ${done}명</strong>이 이번 기간 기록을 마쳤어요.</p>
+      <div class="group-head"><span class="eyebrow">각자의 이번 기록 기간</span><button class="chip" data-act="copy" data-v="${esc(g.code)}">${icon('copy', 16)} 초대 코드 ${esc(g.code)}</button></div>
+      <p><strong>${ms.length}명 중 ${done}명</strong>이 자기 기간의 기록을 마쳤어요.</p>
       <div class="bar" role="img" aria-label="${ms.length}명 중 ${done}명 완료"><span style="width:${(done / ms.length) * 100}%"></span></div>
-      <p class="help">시연 버전에서는 초대 코드가 실제로 전송되지 않아요.</p>
+      <p class="help">멤버마다 기록 주기와 시작일이 달라요. 자기 기간 안에 아직 기록하지 않은 멤버만 콕 찌를 수 있어요.</p>
+      <p class="help">${auth.user ? '친구에게 초대 코드를 공유하면 같은 그룹에 참여할 수 있어요.' : '시연용 그룹입니다.'}</p>
+      ${auth.user ? `<button class="btn secondary" data-act="leave-group" data-v="${g.id}">그룹 나가기</button>` : ''}
     </section>
     <section class="card"><h2>멤버</h2><ul class="members">${ms.map((m) => {
       const st = memberStatus(m);
       const poked = !m.me && S.pokes[pokeKey(g, m)];
       return `<li class="member">
         <a class="member-link" href="${m.me ? '#/profile' : `#/groups/${g.id}/m/${m.id}`}">
-          <span class="ring fire-${fireLevel(st.streak)}">${avatar(m)}</span>
+          ${fireRing(m, st.streak)}
           <span class="m-info"><strong>${esc(m.name)}${m.me ? ' (나)' : ''}${m.public ? '' : ` ${icon('lock', 14)}`}</strong>
-          <small class="${st.done ? '' : 'late'}">${st.done ? '기록 완료' : '미작성'} · 연속 ${st.streak}회</small></span>
+          <small>${periodName(st.days)} 기록 · <span class="${st.done ? 'done-txt' : 'late'}">${st.done ? '완료' : `미작성${st.left == null ? '' : st.left === 0 ? ' · 오늘 마감' : ` · 마감 D-${st.left}`}`}</span></small></span>
         </a>
         ${st.done ? '' : '<span class="alert-dot" role="img" aria-label="미작성">!</span>'}
         ${!st.done && !m.me ? `<button class="btn small ${poked ? 'secondary' : 'primary'}" data-act="poke" data-g="${g.id}" data-v="${m.id}" ${poked ? 'disabled' : ''}>${poked ? '찔렀어요' : '콕 찌르기'}</button>` : ''}
@@ -493,7 +676,7 @@ function memberView(g, m) {
   return {
     title: m.name, back: `#/groups/${g.id}`,
     html: `<section class="profile-top">
-      <span class="ring fire-${fireLevel(st.streak)}">${avatar(m)}</span>
+      ${fireRing(m, st.streak)}
       <h2>${esc(m.name)}</h2><p class="muted">연속 ${st.streak}회 기록 · ${esc(g.name)}</p>
       ${fireLevel(st.streak) ? `<span class="flame-note">${icon('flame', 18)} 프로필이 불타는 중</span>` : ''}
     </section>
@@ -508,12 +691,15 @@ function accountCard() {
   return `<section class="card account-card" aria-labelledby="account-title">
     <h2 id="account-title">Google 계정</h2>
     ${auth.user ? `<p><strong>${esc(auth.user.name)}</strong></p><p class="account-email">${esc(auth.user.email)}</p>
-      <p class="help">기록과 설정은 계정에 저장돼요. 다른 기기에서도 로그인하면 불러올 수 있어요.</p>
+      <p class="help">기록과 설정을 서버에 저장해요. 같은 계정으로 로그인하면 다른 기기에서도 불러올 수 있어요.</p>
+      ${legacyState ? `<button class="btn secondary block" data-act="import-legacy">이 브라우저의 이전 기록 ${legacyState.entries?.length || 0}개 가져오기</button>` : ''}
+      <button class="btn secondary block" data-act="export-data">내 데이터 내보내기</button>
       <button class="btn secondary block" data-act="logout" ${auth.busy ? 'disabled' : ''}>${auth.busy ? '로그아웃 중...' : '로그아웃'}</button>`
-      : `<p class="help">Google 계정으로 로그인할 수 있어요. 시연 기록은 로그인 후에도 별도로 보관돼요.</p>
-      ${auth.enabled ? `<button class="btn secondary block google-login" data-act="login" ${auth.busy ? 'disabled' : ''}><span class="google-letter" aria-hidden="true">G</span>${auth.busy ? '로그인 연결 중...' : 'Google로 로그인'}</button>`
+      : `<p class="help">Google 계정으로 로그인하면 기록과 설정을 서버에 저장해요.</p>
+      ${auth.enabled ? `<button class="btn secondary block google-login" data-act="login" ${auth.busy ? 'disabled' : ''}>Google로 로그인</button>`
         : '<p class="help">Google 로그인을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.</p>'}`}
     <p class="error" role="alert">${esc(auth.error)}</p>
+    ${auth.user && aiRuns.length ? `<details><summary>저장된 AI 활동 ${aiRuns.length}개</summary>${aiRuns.map((run) => `<details><summary>${esc(run.task)} (${esc(new Date(run.createdAt).toLocaleDateString('ko-KR'))})</summary><pre class="ai-history">${esc(JSON.stringify(run.result.data, null, 2))}</pre></details>`).join('')}</details>` : ''}
   </section>`;
 }
 
@@ -522,8 +708,9 @@ function profile() {
   const s = myStats();
   const lvl = fireLevel(s.streak);
   return {
+    title: '개인 프로필', back: 'history',
     html: `${accountCard()}<section class="profile-top">
-      <span class="ring fire-${lvl}">${avatar(me())}</span>
+      ${fireRing(me(), s.streak)}
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
       <input type="file" id="pf-photo" accept="image/*" class="sr-only" data-pf="photo">
       ${lvl ? `<span class="flame-note">${icon('flame', 18)} ${lvl === 2 ? '20회 연속! 프로필이 활활 불타요' : '10회 연속! 프로필이 불타기 시작했어요'}</span>` : ''}
@@ -540,8 +727,9 @@ function profile() {
     </section>
     <section class="card"><h2>기록 설정</h2>
       <label class="switch-row" for="pf-public"><span>기록 공개<small>그룹 친구가 내 기록을 볼 수 있어요</small></span><input type="checkbox" role="switch" id="pf-public" data-pf="public" ${p.public ? 'checked' : ''}></label>
-      <div class="field"><label for="pf-period">작성 기간</label><select id="pf-period" data-pf="periodDays">
-        ${[[7, '매주'], [14, '2주마다'], [30, '한 달마다']].map(([v, l]) => `<option value="${v}" ${p.periodDays === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><span class="label" id="period-l">작성 기간</span>
+        <div class="seg full" role="group" aria-labelledby="period-l">${[7, 14, 30].map((v) => `<button data-act="period" data-v="${v}" aria-pressed="${p.periodDays === v}">${periodName(v)}</button>`).join('')}</div>
+        <p class="help">${periodName(p.periodDays)} 한 번씩 기록해요. 이번 기간: ${fmtMD(s.ps)} ~ ${fmtMD(s.pe)}</p></div>
       <div class="field"><span class="label" id="pf-start-l">시작 날짜</span>
         <button type="button" class="date-btn" data-act="cal-start" aria-labelledby="pf-start-l pf-start-v">${icon('calendar')}<span id="pf-start-v">${fmtW(p.startDate)}</span></button></div>
       <label class="switch-row" for="pf-notify"><span>마감 알림<small>기간이 끝나기 2일 전부터 앱을 열면 알려 드려요</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''}></label>
@@ -584,6 +772,25 @@ function applyPrefs() {
   if (theme === 'system') root.removeAttribute('data-theme');
   else root.dataset.theme = theme;
   root.style.fontSize = `${S.profile.fontScale}%`;
+}
+
+// ───────── 확인창 ─────────
+// 브라우저 기본 confirm()은 앱 안 브라우저·웹뷰에서 막혀 바로 '취소'가 되므로 직접 만든 창을 쓴다
+function ask(message, okLabel = '확인', danger = false) {
+  const d = $('#ask');
+  d.innerHTML = `<form method="dialog"><p id="ask-msg" class="pre">${esc(message)}</p>
+    <div class="ask-foot"><button class="btn secondary" value="no">취소</button><button class="btn ${danger ? 'danger' : 'primary'}" value="ok">${esc(okLabel)}</button></div></form>`;
+  d.returnValue = '';
+  d.showModal();
+  d.querySelector('[value="no"]').focus();
+  return new Promise((resolve) => d.addEventListener('close', () => resolve(d.returnValue === 'ok'), { once: true }));
+}
+
+async function closeSheet() {
+  if (ui.rec?.loading) { toast('처리 중이에요. 완료될 때까지 기다려 주세요.'); return; }
+  if (ui.rec?.raw.trim() && !(await ask('작성 중인 내용이 사라져요. 닫을까요?', '닫기'))) return;
+  ui.rec = null;
+  $('#sheet').close();
 }
 
 // ───────── 달력 (기본 날짜 입력 대신 앱 디자인에 맞춘 달력) ─────────
@@ -641,6 +848,8 @@ function view() {
     return m ? memberView(g, m) : groupDetail(g);
   }
   if (tab === 'profile') return profile();
+  if (tab === 'records') return records();
+  if (tab === 'entry') return entryView(a);
   return dashboard();
 }
 
@@ -648,20 +857,22 @@ let current;
 function renderTop() {
   const v = current || {};
   const badge = ui.demo ? '<span class="badge" title="AI 키 없이 미리 준비한 답변을 보여 줘요">시연 모드</span>' : '';
+  const backBtn = v.back === 'history'
+    ? `<button class="icon-btn" data-act="go-back" aria-label="뒤로">${icon('back', 24)}</button>`
+    : `<a class="icon-btn" href="${v.back}" aria-label="뒤로">${icon('back', 24)}</a>`;
+  // 메인 화면에서는 오른쪽 위 프로필 사진으로 개인 프로필에 들어간다
+  const profileBtn = auth.user ? `<a class="top-avatar" href="#/profile" aria-label="개인 프로필">${fireRing(me(), myStats().streak, 'sm')}</a>`
+    : '<a class="btn small secondary" href="#/profile">로그인</a>';
   $('#topbar').innerHTML = v.back
-    ? `<a class="icon-btn" href="${v.back}" aria-label="뒤로">${icon('back', 24)}</a><h1>${esc(v.title)}</h1>${badge}`
-    : `<h1 class="logo">AIM<b>ers</b></h1><div class="top-account">${badge}<a class="btn small secondary" href="#/profile">${auth.user ? '내 계정' : '로그인'}</a></div>`;
+    ? `${backBtn}<h1>${esc(v.title)}</h1>${badge}`
+    : `<h1 class="logo">AIM<b>ers</b></h1>${badge}${profileBtn}`;
 }
 function render(scroll = false) {
-  if (auth.loading) return;
-  if (bootError) {
-    renderTop();
-    $('#main').innerHTML = `<section class="card"><h1>기록을 불러오지 못했어요</h1><p class="error" role="alert">${esc(bootError)}</p><button class="btn primary" data-act="retry-load">다시 불러오기</button><button class="btn secondary" data-act="backup">임시 기록 백업</button></section>`;
-    return;
-  }
+  if (auth.loading || (auth.user && !sync.ready)) return;
   current = view();
   renderTop();
   $('#main').innerHTML = current.html;
+  document.querySelectorAll('[data-pf]').forEach((el) => { el.disabled = !auth.user; });
   const tab = route()[0] || 'dashboard';
   document.querySelectorAll('.tabbar a').forEach((a) => (a.dataset.tab === tab ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
   document.title = current.title ? `${current.title} · AIMers` : 'AIMers';
@@ -674,42 +885,37 @@ function render(scroll = false) {
 // ───────── 이벤트 ─────────
 const actions = {
   login: async () => {
-    if (!cloud || auth.busy) return;
+    if (auth.busy) return;
     auth.busy = true; auth.error = ''; render();
-    try {
-      const { error } = await cloud.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${location.origin}/`, queryParams: { prompt: 'select_account' } } });
-      if (error) throw error;
-    } catch {
-      auth.error = 'Google 로그인에 연결하지 못했어요. 다시 시도해 주세요.';
-      auth.busy = false; render();
-    }
+    try { await sessionManager.signIn(); }
+    catch { auth.error = 'Google 로그인에 연결하지 못했어요. 다시 시도해 주세요.'; auth.busy = false; render(); }
   },
-  'retry-load': () => location.reload(),
-  'retry-sync': () => { sync?.flush().catch(() => {}); },
-  backup: () => {
-    const raw = localStorage.getItem(storageKey());
-    const blob = new Blob([JSON.stringify({ state: S, recoveryCache: raw ? JSON.parse(raw) : null })], { type: 'application/json' });
+  'retry-save': async () => { await flushSave(); },
+  'reload-data': async () => {
+    if ((sync.pending || sync.saving) && !(await ask('저장하지 못한 변경 내용이 사라져요. 먼저 내보내기로 보관했나요?', '다시 불러오기', true))) return;
+    location.reload();
+  },
+  'export-data': () => {
+    const blob = new Blob([JSON.stringify({ user: auth.user, state: S, aiRuns }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'aimers-backup.json'; a.click();
+    const link = document.createElement('a'); link.href = url; link.download = `aimers-${todayStr()}.json`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
-  'reload-cloud': () => {
-    if (!confirm('이 기기의 미저장 변경을 버리고 서버 기록을 불러올까요? 필요한 기록은 먼저 백업해 주세요.')) return;
-    localStorage.removeItem(storageKey());
-    location.reload();
+  'import-legacy': async () => {
+    if (!legacyState || !(await ask('이전 기록과 설정으로 현재 기록과 설정을 교체할까요? 그룹과 공개 설정은 현재 상태를 유지해요.', '가져오기'))) return;
+    S = { ...S, profile: { ...legacyState.profile, public: S.profile.public }, entries: legacyState.entries, categories: legacyState.categories, lastNotified: legacyState.lastNotified || '' };
+    if (await save()) { legacyState = null; applyPrefs(); render(); toast('이전 기록을 서버에 저장했어요.'); }
+    else render();
   },
   logout: async () => {
     if (auth.busy) return;
     auth.busy = true; auth.error = ''; render();
     try {
-      await sync?.flush();
-      const { error } = await cloud.auth.signOut({ scope: 'local' });
-      if (error) throw error;
-      location.replace('/#/profile');
-      location.reload();
-    } catch {
-      auth.error = '기록 저장과 로그아웃을 완료하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+      if (!await flushSave()) throw new Error('변경 내용을 먼저 저장해 주세요.');
+      await sessionManager.signOut();
+      location.assign('/?auth=logout#/profile');
+    } catch (e) {
+      auth.error = e.message || '로그아웃하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
       auth.busy = false; render();
     }
   },
@@ -725,12 +931,13 @@ const actions = {
   'cal-pick': (el) => { $('#cal').close(); cal.onPick?.(el.dataset.v); },
   'cal-close': () => $('#cal').close(),
   theme: (el) => { S.profile.theme = el.dataset.v; save(); applyPrefs(); render(); },
-  'del-cat': (el) => {
+  period: (el) => { S.profile.periodDays = Number(el.dataset.v); save(); render(); toast(`이제 ${periodName(S.profile.periodDays)} 기록해요.`); },
+  'del-cat': async (el) => {
     const c = el.dataset.v;
     const n = S.entries.filter((e) => e.category === c).length;
     const rest = S.categories.filter((x) => x !== c);
     const target = c !== '기타' ? '기타' : rest[0];
-    if (!rest.length || !confirm(n ? `'${c}' 카테고리를 삭제할까요?\n이 카테고리의 기록 ${n}개는 '${target}'(으)로 옮겨져요.` : `'${c}' 카테고리를 삭제할까요?`)) return;
+    if (!rest.length || !(await ask(n ? `'${c}' 카테고리를 삭제할까요?\n이 카테고리의 기록 ${n}개는 '${target}'(으)로 옮겨져요.` : `'${c}' 카테고리를 삭제할까요?`, '삭제', true))) return;
     S.categories = rest;
     if (n) {
       if (!S.categories.includes(target)) S.categories.push(target);
@@ -741,15 +948,14 @@ const actions = {
   },
   sort: (el) => { ui.sort = el.dataset.v; render(); },
   cat: (el) => { ui.cat = el.dataset.v; render(); },
-  'del-entry': (el) => {
-    if (!confirm('이 기록을 삭제할까요? 되돌릴 수 없어요.')) return;
+  'del-entry': async (el) => {
+    if (!(await ask('이 기록을 삭제할까요?\n되돌릴 수 없어요.', '삭제', true))) return;
     S.entries = S.entries.filter((e) => e.id !== el.dataset.v);
-    save(); render(); toast('기록을 삭제했어요.');
+    save(); toast('기록을 삭제했어요.');
+    if (route()[0] === 'entry') actions['go-back'](); else render();
   },
-  'close-sheet': () => {
-    if (ui.rec?.raw.trim() && !confirm('작성 중인 내용이 사라져요. 닫을까요?')) return;
-    $('#sheet').close();
-  },
+  'go-back': () => { if (history.length > 1) history.back(); else location.hash = '#/dashboard'; },
+  'close-sheet': () => closeSheet(),
   'rec-cat': (el) => { ui.rec.category = el.dataset.v; renderSheet(); },
   'rec-back': () => { const r = ui.rec; r.error = ''; r.step = r.step === 'review' && r.questions.length ? 'ask' : 'write'; renderSheet(); },
   'rec-next': async () => {
@@ -768,15 +974,21 @@ const actions = {
     r.loading = false; renderSheet();
   },
   'rec-summarize': summarize,
-  'rec-save': () => {
+  'rec-save': async () => {
     const r = ui.rec;
+    if (r.loading) return;
     if (!r.draft.title.trim() || !r.draft.summary.trim()) { r.error = '제목과 요약을 입력해 주세요.'; renderSheet(); return; }
     const before = myStats().streak;
+    r.savedId ||= uid();
+    S.entries = S.entries.filter((e) => e.id !== r.savedId);
     S.entries.unshift({
-      id: uid(), date: r.date, category: r.category, title: r.draft.title.trim(), summary: r.draft.summary.trim(),
+      id: r.savedId, date: r.date, category: r.category, title: r.draft.title.trim(), summary: r.draft.summary.trim(),
       raw: r.raw.trim(), qa: r.questions.map((q, i) => ({ q, a: (r.answers[i] || '').trim() })), tags: r.draft.tags,
     });
-    save();
+    r.loading = true; renderSheet();
+    const saved = await save();
+    r.loading = false;
+    if (!saved) { r.error = '서버에 저장하지 못했어요. 변경 내용은 이 화면에 남아 있어요. 저장 상태를 확인해 주세요.'; renderSheet(); return; }
     ui.rec = null;
     $('#sheet').close();
     const after = myStats().streak;
@@ -828,19 +1040,35 @@ const actions = {
   copy: async (el) => {
     try { await navigator.clipboard.writeText(el.dataset.v); toast('초대 코드를 복사했어요.'); } catch { toast(`초대 코드: ${el.dataset.v}`); }
   },
-  poke: (el) => {
+  poke: async (el) => {
     const g = S.groups.find((x) => x.id === el.dataset.g);
     const m = g?.members.find((x) => x.id === el.dataset.v);
     if (!m) return;
+    if (auth.user) {
+      try {
+        await api(`/api/groups/${g.id}/pokes`, { method: 'POST', body: { recipientId: m.id } });
+        await refreshData(); render(); toast(`${m.name}님에게 기록 알림을 보냈어요.`);
+      } catch (e) { toast(e.message); }
+      return;
+    }
     S.pokes[pokeKey(g, m)] = todayStr();
     save(); render();
-    toast(`${m.name}님을 콕 찔렀어요. 기록을 독촉하는 알림이 갔어요.`);
+    toast('시연 화면에서 콕 찌르기를 표시했어요.');
   },
-  reset: () => {
-    if (!confirm(auth.user ? '이 계정의 기록과 설정을 초기화할까요?' : '모든 기록과 설정을 지우고 시연 데이터로 되돌릴까요?')) return;
-    S = initialState(); save(); applyPrefs(); ui.insight.data = null; ui.match.results = null;
+  'read-notifications': async () => {
+    try { await api('/api/notifications/read', { method: 'POST' }); await refreshData(); render(); } catch (e) { toast(e.message); }
+  },
+  'leave-group': async (el) => {
+    if (!(await ask('이 그룹에서 나갈까요? 다시 참여하려면 초대 코드가 필요해요.', '나가기', true))) return;
+    try { await api(`/api/groups/${el.dataset.v}`, { method: 'DELETE' }); await refreshData(); location.hash = '#/groups'; render(); } catch (e) { toast(e.message); }
+  },
+  reset: async () => {
+    if (!(await ask('이 계정의 기록과 설정을 초기화할까요?', '초기화', true))) return;
+    const groups = S.groups;
+    S = initialState(); if (auth.user) S.groups = groups;
+    const saved = await save(); applyPrefs(); ui.insight.data = null; ui.match.results = null;
     ui.interview = { theme: '', questions: [], active: -1, answer: '', feedback: null, loading: '' };
-    location.hash = '#/dashboard'; render(true); toast(auth.user ? '기록과 설정을 초기화했어요.' : '시연 데이터로 초기화했어요.');
+    location.hash = '#/dashboard'; render(true); if (saved) toast('기록과 설정을 초기화했어요.');
   },
 };
 
@@ -851,13 +1079,27 @@ const forms = {
     if (!S.categories.includes(name)) { S.categories.push(name); save(); }
     if (ui.rec && $('#sheet').open) { ui.rec.category = name; renderSheet(); } else { render(); toast(`'${name}' 카테고리를 추가했어요.`); }
   },
-  'new-group': (f) => {
+  'new-group': async (f) => {
     const name = f.elements.label.value.trim();
     if (!name) return;
+    if (auth.user) {
+      try {
+        const g = await api('/api/groups', { method: 'POST', body: { name } });
+        await refreshData(); ui.newGroup = false; location.hash = `#/groups/${g.id}`; render();
+        toast('그룹을 만들었어요. 초대 코드를 공유해 주세요.');
+      } catch (e) { toast(e.message); }
+      return;
+    }
     const g = { id: uid(), name, code: Math.random().toString(36).slice(2, 8).toUpperCase(), members: [] };
     S.groups.push(g); ui.newGroup = false; save();
     location.hash = `#/groups/${g.id}`;
     toast('그룹을 만들었어요. 초대 코드를 친구에게 보내 보세요.');
+  },
+  'join-group': async (f) => {
+    try {
+      const g = await api('/api/groups/join', { method: 'POST', body: { code: f.elements.code.value.trim() } });
+      await refreshData(); location.hash = `#/groups/${g.id}`; render(); toast('그룹에 참여했어요.');
+    } catch (e) { toast(e.message); }
   },
 };
 
@@ -894,12 +1136,17 @@ async function setPref(el) {
 
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]');
+  const writes = ['record', 'pick-day', 'cal-start', 'theme', 'del-cat', 'del-entry', 'rec-save', 'new-group', 'poke', 'reset'];
+  if (el && writes.includes(el.dataset.act) && !auth.user) {
+    toast('기록을 저장하거나 그룹에 참여하려면 Google로 로그인해 주세요.'); location.hash = '#/profile'; return;
+  }
   if (el && actions[el.dataset.act]) actions[el.dataset.act](el);
 });
 document.addEventListener('submit', (ev) => {
   const f = ev.target.dataset?.form;
   if (!f) return;
   ev.preventDefault();
+  if (!auth.user) { toast('Google로 로그인한 뒤 사용할 수 있어요.'); location.hash = '#/profile'; return; }
   forms[f]?.(ev.target);
 });
 document.addEventListener('input', (ev) => {
@@ -909,80 +1156,70 @@ document.addEventListener('input', (ev) => {
 });
 document.addEventListener('change', (ev) => { if (ev.target.dataset.pf) setPref(ev.target); });
 $('#cal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); }); // 바깥을 누르면 닫기
-$('#sheet').addEventListener('cancel', (ev) => {
-  if (ui.rec?.raw.trim() && !confirm('작성 중인 내용이 사라져요. 닫을까요?')) ev.preventDefault();
-});
+$('#sheet').addEventListener('cancel', (ev) => { ev.preventDefault(); closeSheet(); }); // Esc도 같은 확인을 거친다
 window.addEventListener('hashchange', () => render(true));
 
 async function initAuth() {
   $('#main').innerHTML = '<p class="help" role="status">계정을 확인하고 있어요.</p>';
   try {
-    cloud = await connectCloud();
-    auth.enabled = Boolean(cloud);
-    if (cloud) {
-      const { data, error } = await cloud.auth.getSession();
-      if (error) {
-        auth.error = 'Google 로그인을 완료하지 못했어요. 다시 시도해 주세요.';
-      }
-      const user = data.session?.user;
-      auth.user = user ? { id: user.id, email: user.email || '', name: user.user_metadata?.full_name || user.email?.split('@')[0] || '나' } : null;
-      if (auth.user) {
-        const remote = await readState(cloud, user.id);
-        let cached;
-        try { cached = JSON.parse(localStorage.getItem(storageKey())); } catch { /* No recovery cache. */ }
-        S = remote?.state || initialState();
-        const revision = remote?.revision || 0;
-        sync = new StateSync({
-          revision,
-          write: async (state, expected) => {
-            const { data } = await cloud.auth.getSession();
-            if (data.session?.user.id !== user.id) throw new Error('계정이 변경됐어요. 페이지를 새로고침해 주세요.');
-            return writeState(cloud, state, expected);
-          },
-          cache: (value) => {
-            try { localStorage.setItem(storageKey(), JSON.stringify(value)); }
-            catch { toast('이 기기에 임시 기록을 보관하지 못했어요. 서버 저장 상태를 확인해 주세요.'); }
-          },
-          status: syncStatus,
-        });
-        cloudReady = true;
-        if (cached?.dirty && cached.state) {
-          S = cached.state;
-          if (cached.revision !== revision) {
-            sync.conflict = true;
-            sync.pending = structuredClone(S);
-            syncStatus('conflict', '다른 기기의 기록과 미저장 변경이 달라요. 백업 후 최신 기록을 불러와 주세요.');
-          } else sync.queue(S);
-        } else if (!remote) {
-          sync.queue(S);
-          await sync.flush();
-        } else syncStatus('saved');
-      } else S = load();
-      // Never await Supabase calls inside this callback; its auth lock is held.
-      cloud.auth.onAuthStateChange((_event, session) => {
-        if ((session?.user.id || null) !== (auth.user?.id || null)) setTimeout(() => location.reload(), 0);
-      });
-    } else S = load();
-  } catch (error) {
-    bootError = error.message || '기록을 불러오지 못했어요. 다시 시도해 주세요.';
+    const session = await sessionManager.initialize();
+    auth.enabled = session.enabled;
+    auth.user = session.user;
+  } catch {
+    auth.error = '로그인 상태를 확인하지 못했어요. 페이지를 새로고침해 주세요.';
   }
+  const url = new URL(location.href);
+  const error = url.searchParams.get('auth_error');
+  if (error) {
+    auth.error = ({
+      cancelled: 'Google 로그인을 취소했어요. 다시 로그인할 수 있어요.',
+      invalid_state: '로그인 요청이 만료되었어요. 다시 로그인해 주세요.',
+      unavailable: 'Google 로그인을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.',
+      failed: 'Google 로그인에 실패했어요. 다시 시도해 주세요.',
+    })[error] || '로그인하지 못했어요. 다시 시도해 주세요.';
+  }
+  const success = url.searchParams.get('auth') === 'success';
+  url.searchParams.delete('auth'); url.searchParams.delete('auth_error');
+  history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  if (auth.user) {
+    try {
+      await refreshData();
+      aiRuns = (await api('/api/ai/history')).runs;
+      try {
+        const previous = JSON.parse(localStorage.getItem(`${KEY}:google:${auth.user.googleSub}`) || localStorage.getItem(KEY));
+        if (previous?.v === 1) legacyState = previous;
+      } catch { /* 기존 브라우저 저장소를 읽을 수 없어도 서버 데이터는 사용할 수 있다. */ }
+    } catch (e) {
+      auth.loading = false; sync.ready = false;
+      auth.error = e.message || '서버의 기록을 불러오지 못했어요.';
+      $('#main').innerHTML = `${accountCard()}<p class="error" role="alert">기록을 불러오지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.</p><button class="btn secondary" data-act="reload-data">다시 불러오기</button>`;
+      renderTop(); renderSync(); return;
+    }
+  } else S = seed();
   auth.loading = false;
-  applyPrefs(); render();
-  if (!bootError) maybeNotify();
+  applyPrefs(); render(); maybeNotify();
+  if (success && auth.user) toast(`${auth.user.name}님, 로그인했어요.`);
 }
 
-function syncStatus(status, message = '') {
-  const node = $('#sync-status');
-  node.hidden = false;
-  node.dataset.state = status;
-  const labels = { pending: '저장 대기 중', saving: '계정에 저장 중', saved: '계정에 저장됨' };
-  node.innerHTML = `<span role="status">${esc(message || labels[status] || '저장하지 못했어요.')}</span>${['error', 'conflict'].includes(status)
-    ? `${status === 'error' ? '<button class="btn small secondary" data-act="retry-sync">저장 재시도</button>' : ''}<button class="btn small secondary" data-act="backup">백업</button><button class="btn small secondary" data-act="reload-cloud">최신 기록 불러오기</button>` : ''}`;
-}
-
-window.addEventListener('online', () => { if (!sync?.conflict) sync?.flush().catch(() => {}); });
-window.addEventListener('beforeunload', (event) => {
-  if (sync?.pending) { event.preventDefault(); event.returnValue = ''; }
+window.addEventListener('focus', async () => {
+  if (auth.loading) return;
+  try {
+    const session = await sessionManager.current();
+    if (session.user?.id !== auth.user?.id) {
+      if (sync.pending || sync.saving) { sync.error = '로그인 계정이 변경됐어요. 변경 내용을 내보낸 뒤 새로고침해 주세요.'; renderSync(); }
+      else location.reload();
+    } else if (auth.user && sync.ready && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {
+      const generation = sync.generation;
+      const data = await api('/api/state');
+      if (generation === sync.generation && data.revision >= sync.revision && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {
+        S = data.state; sync.revision = data.revision; applyPrefs(); render();
+      }
+    }
+  } catch { /* 연결이 복구되면 다음 포커스에서 다시 확인한다. */ }
+});
+window.addEventListener('online', () => { if (sync.pending && !sync.conflict) flushSave(); });
+window.addEventListener('beforeunload', (ev) => {
+  if (sync.pending || sync.saving) { ev.preventDefault(); ev.returnValue = ''; }
 });
 
 await initAuth();

@@ -6,12 +6,14 @@
     "build": "node build.mjs",
     "prestart": "npm run build",
     "start": "node --env-file-if-exists=.env server.js",
+    "pretest": "npm run build",
     "test": "node --test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0"
   },
   "devDependencies": {
+    "jsdom": "^31.0.0",
     "@electric-sql/pglite": "^0.3.0",
     "esbuild": "^0.25.0"
   },
