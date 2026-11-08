@@ -109,7 +109,8 @@ button { cursor: pointer; }
 }
 .topbar h1 { font-size: 1.125rem; font-weight: 700; flex: 1; }
 .topbar .logo { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em; padding-left: 4px; }
-.logo b { color: var(--primary); }
+.logo { color: var(--primary); }
+.logo b { color: var(--text); }
 .badge { font-size: 0.75rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 
 main {
