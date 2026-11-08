@@ -158,6 +158,13 @@ h3 { font-size: 1.0625rem; font-weight: 700; }
 .btn.secondary:active { background: var(--border); }
 .btn.danger { background: var(--danger); color: #fff; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.top-account { display: flex; align-items: center; gap: 8px; }
+.account-card { display: grid; gap: 12px; }
+.account-card p { margin: 0; }
+.account-card .error:empty { display: none; }
+.account-email { overflow-wrap: anywhere; color: var(--text-2); }
+.google-login { text-decoration: none; }
+.google-letter { font-family: Arial, sans-serif; font-weight: 700; font-size: 20px; }
 .icon-btn {
   width: 44px; height: 44px; display: inline-grid; place-items: center;
   border: 0; background: transparent; border-radius: 999px;
@@ -400,3 +407,6 @@ input[type="range"] { width: 100%; accent-color: var(--primary); min-height: 44p
 .cat-list .icon-btn { color: var(--danger); }
 .cat-list .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .evidence { margin: 0; padding: 10px 14px; border-left: 3px solid var(--primary); background: var(--surface-2); border-radius: 0 12px 12px 0; display: grid; gap: 4px; }
+.sync-status { padding: 8px 16px; font-size: 13px; color: var(--text-2); display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--border); }
+.sync-status[hidden] { display: none; }
+.sync-status[data-state="error"], .sync-status[data-state="conflict"] { color: var(--text, #222); background: var(--surface, #fff); border: 1px solid #b45309; }

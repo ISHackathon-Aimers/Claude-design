@@ -4,6 +4,7 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { runTask, isDemo } from './ai.js';
+import { publicConfig, requireUser } from './auth.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const MAX_BODY = 200_000;
@@ -21,6 +22,13 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
 }
 
 async function readJson(req) {
+  // Vercel may provide a parsed body; local Node supplies an unread stream.
+  if (req.body !== undefined) {
+    const raw = typeof req.body === 'string' || Buffer.isBuffer(req.body) ? req.body.toString() : JSON.stringify(req.body);
+    if (Buffer.byteLength(raw) > MAX_BODY) throw Object.assign(new Error('요청이 너무 큽니다.'), { status: 413 });
+    try { return JSON.parse(raw); }
+    catch { throw Object.assign(new Error('요청 형식이 올바르지 않습니다.'), { status: 400 }); }
+  }
   const chunks = [];
   let size = 0;
   for await (const c of req) {
@@ -38,8 +46,13 @@ async function readJson(req) {
 export async function handle(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/api/config') {
+      if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+      return send(res, 200, publicConfig());
+    }
     if (url.pathname === '/api/ai') {
       if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+      if (!isDemo()) await requireUser(req);
       const body = await readJson(req).catch((e) => e);
       if (body instanceof Error) return send(res, body.status, { error: body.message });
       const result = await runTask(body?.task, body?.input);
@@ -60,8 +73,8 @@ export async function handle(req, res) {
     if (!data) return send(res, 404, 'Not found', 'text/plain');
     send(res, 200, data, TYPES[path.extname(file)] || 'application/octet-stream');
   } catch (e) {
-    console.error(e);
-    send(res, 500, { error: '서버 오류가 발생했습니다.' });
+    if (!e.status || e.status >= 500) console.error(e);
+    send(res, e.status || 500, { error: e.status ? e.message : '서버 오류가 발생했습니다.' });
   }
 }
 

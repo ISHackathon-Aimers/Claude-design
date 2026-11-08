@@ -1,7 +1,15 @@
 import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday } from './logic.js';
+import { connectCloud, readState, writeState } from './cloud.bundle.js';
+import { StateSync } from './sync-state.js';
 
-// shortcut: 기록과 그룹은 이 브라우저(localStorage)에만 저장, 그룹 친구는 시연용 가상 사용자. 실제 서비스 전에 로그인·DB로 교체.
+// Guest demo state stays local. Signed-in state is stored in Supabase.
 const KEY = 'aimers-v1';
+const auth = { loading: true, enabled: false, user: null, error: '', busy: false };
+const storageKey = () => auth.user ? `${KEY}:supabase:${auth.user.id}` : KEY;
+let cloud = null;
+let sync = null;
+let cloudReady = false;
+let bootError = '';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s = '') => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -102,13 +110,28 @@ function seed() {
 
 function load() {
   try {
-    const s = JSON.parse(localStorage.getItem(KEY));
+    const s = JSON.parse(localStorage.getItem(storageKey()));
     if (s?.v === 1) return s;
   } catch { /* 저장소를 못 쓰면 시연 데이터로 시작 */ }
-  return seed();
+  return initialState();
+}
+function initialState() {
+  const s = seed();
+  if (auth.user) {
+    s.profile.name = auth.user.name.slice(0, 20);
+    s.profile.bio = '';
+    s.profile.startDate = todayStr();
+    s.entries = [];
+    s.groups = [];
+  }
+  return s;
 }
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast('저장 공간이 부족해 저장하지 못했어요.'); }
+  if (auth.user) {
+    if (cloudReady && sync) sync.queue(S);
+    return;
+  }
+  try { localStorage.setItem(storageKey(), JSON.stringify(S)); } catch { toast('저장 공간이 부족해 저장하지 못했어요.'); }
 }
 
 let S = load();
@@ -133,7 +156,13 @@ function toast(msg) {
 async function ai(task, input) {
   let res;
   try {
-    res = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task, input }) });
+    const headers = { 'content-type': 'application/json' };
+    if (cloud && auth.user) {
+      const { data, error } = await cloud.auth.getSession();
+      if (error || !data.session) throw new Error('다시 로그인해 주세요.');
+      headers.authorization = `Bearer ${data.session.access_token}`;
+    }
+    res = await fetch('/api/ai', { method: 'POST', headers, body: JSON.stringify({ task, input }) });
   } catch {
     throw new Error('서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.');
   }
@@ -475,12 +504,25 @@ function memberView(g, m) {
 }
 
 // ───────── 4번 탭: 개인 프로필 ─────────
+function accountCard() {
+  return `<section class="card account-card" aria-labelledby="account-title">
+    <h2 id="account-title">Google 계정</h2>
+    ${auth.user ? `<p><strong>${esc(auth.user.name)}</strong></p><p class="account-email">${esc(auth.user.email)}</p>
+      <p class="help">기록과 설정은 계정에 저장돼요. 다른 기기에서도 로그인하면 불러올 수 있어요.</p>
+      <button class="btn secondary block" data-act="logout" ${auth.busy ? 'disabled' : ''}>${auth.busy ? '로그아웃 중...' : '로그아웃'}</button>`
+      : `<p class="help">Google 계정으로 로그인할 수 있어요. 시연 기록은 로그인 후에도 별도로 보관돼요.</p>
+      ${auth.enabled ? `<button class="btn secondary block google-login" data-act="login" ${auth.busy ? 'disabled' : ''}><span class="google-letter" aria-hidden="true">G</span>${auth.busy ? '로그인 연결 중...' : 'Google로 로그인'}</button>`
+        : '<p class="help">Google 로그인을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.</p>'}`}
+    <p class="error" role="alert">${esc(auth.error)}</p>
+  </section>`;
+}
+
 function profile() {
   const p = S.profile;
   const s = myStats();
   const lvl = fireLevel(s.streak);
   return {
-    html: `<section class="profile-top">
+    html: `${accountCard()}<section class="profile-top">
       <span class="ring fire-${lvl}">${avatar(me())}</span>
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
       <input type="file" id="pf-photo" accept="image/*" class="sr-only" data-pf="photo">
@@ -515,7 +557,7 @@ function profile() {
         <div class="seg full" role="group" aria-labelledby="theme-l">${[['system', '시스템 설정'], ['light', '라이트'], ['dark', '다크']].map(([v, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${(p.theme || 'system') === v}">${l}</button>`).join('')}</div></div>
       <div class="field"><label for="pf-scale">글자 크기 <output id="scale-out">${p.fontScale}%</output></label><input type="range" id="pf-scale" min="90" max="130" step="10" data-pf="fontScale" value="${p.fontScale}"></div>
     </section>
-    <button class="btn secondary block" data-act="reset">시연 데이터로 초기화</button>`,
+    <button class="btn secondary block" data-act="reset">${auth.user ? '기록과 설정 초기화' : '시연 데이터로 초기화'}</button>`,
   };
 }
 
@@ -608,9 +650,15 @@ function renderTop() {
   const badge = ui.demo ? '<span class="badge" title="AI 키 없이 미리 준비한 답변을 보여 줘요">시연 모드</span>' : '';
   $('#topbar').innerHTML = v.back
     ? `<a class="icon-btn" href="${v.back}" aria-label="뒤로">${icon('back', 24)}</a><h1>${esc(v.title)}</h1>${badge}`
-    : `<h1 class="logo">AIM<b>ers</b></h1>${badge}`;
+    : `<h1 class="logo">AIM<b>ers</b></h1><div class="top-account">${badge}<a class="btn small secondary" href="#/profile">${auth.user ? '내 계정' : '로그인'}</a></div>`;
 }
 function render(scroll = false) {
+  if (auth.loading) return;
+  if (bootError) {
+    renderTop();
+    $('#main').innerHTML = `<section class="card"><h1>기록을 불러오지 못했어요</h1><p class="error" role="alert">${esc(bootError)}</p><button class="btn primary" data-act="retry-load">다시 불러오기</button><button class="btn secondary" data-act="backup">임시 기록 백업</button></section>`;
+    return;
+  }
   current = view();
   renderTop();
   $('#main').innerHTML = current.html;
@@ -625,6 +673,46 @@ function render(scroll = false) {
 
 // ───────── 이벤트 ─────────
 const actions = {
+  login: async () => {
+    if (!cloud || auth.busy) return;
+    auth.busy = true; auth.error = ''; render();
+    try {
+      const { error } = await cloud.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${location.origin}/`, queryParams: { prompt: 'select_account' } } });
+      if (error) throw error;
+    } catch {
+      auth.error = 'Google 로그인에 연결하지 못했어요. 다시 시도해 주세요.';
+      auth.busy = false; render();
+    }
+  },
+  'retry-load': () => location.reload(),
+  'retry-sync': () => { sync?.flush().catch(() => {}); },
+  backup: () => {
+    const raw = localStorage.getItem(storageKey());
+    const blob = new Blob([JSON.stringify({ state: S, recoveryCache: raw ? JSON.parse(raw) : null })], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'aimers-backup.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+  'reload-cloud': () => {
+    if (!confirm('이 기기의 미저장 변경을 버리고 서버 기록을 불러올까요? 필요한 기록은 먼저 백업해 주세요.')) return;
+    localStorage.removeItem(storageKey());
+    location.reload();
+  },
+  logout: async () => {
+    if (auth.busy) return;
+    auth.busy = true; auth.error = ''; render();
+    try {
+      await sync?.flush();
+      const { error } = await cloud.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+      location.replace('/#/profile');
+      location.reload();
+    } catch {
+      auth.error = '기록 저장과 로그아웃을 완료하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+      auth.busy = false; render();
+    }
+  },
   record: () => openRecord(),
   'pick-day': (el) => openRecord(el.dataset.v),
   'cal-rec': () => openCalendar({ value: ui.rec.date, max: todayStr(), title: '기록 날짜', onPick: (d) => { ui.rec.date = d; renderSheet(); } }),
@@ -749,10 +837,10 @@ const actions = {
     toast(`${m.name}님을 콕 찔렀어요. 기록을 독촉하는 알림이 갔어요.`);
   },
   reset: () => {
-    if (!confirm('모든 기록과 설정을 지우고 시연 데이터로 되돌릴까요?')) return;
-    S = seed(); save(); applyPrefs(); ui.insight.data = null; ui.match.results = null;
+    if (!confirm(auth.user ? '이 계정의 기록과 설정을 초기화할까요?' : '모든 기록과 설정을 지우고 시연 데이터로 되돌릴까요?')) return;
+    S = initialState(); save(); applyPrefs(); ui.insight.data = null; ui.match.results = null;
     ui.interview = { theme: '', questions: [], active: -1, answer: '', feedback: null, loading: '' };
-    location.hash = '#/dashboard'; render(true); toast('시연 데이터로 초기화했어요.');
+    location.hash = '#/dashboard'; render(true); toast(auth.user ? '기록과 설정을 초기화했어요.' : '시연 데이터로 초기화했어요.');
   },
 };
 
@@ -826,7 +914,76 @@ $('#sheet').addEventListener('cancel', (ev) => {
 });
 window.addEventListener('hashchange', () => render(true));
 
-applyPrefs();
-render();
-maybeNotify();
+async function initAuth() {
+  $('#main').innerHTML = '<p class="help" role="status">계정을 확인하고 있어요.</p>';
+  try {
+    cloud = await connectCloud();
+    auth.enabled = Boolean(cloud);
+    if (cloud) {
+      const { data, error } = await cloud.auth.getSession();
+      if (error) {
+        auth.error = 'Google 로그인을 완료하지 못했어요. 다시 시도해 주세요.';
+      }
+      const user = data.session?.user;
+      auth.user = user ? { id: user.id, email: user.email || '', name: user.user_metadata?.full_name || user.email?.split('@')[0] || '나' } : null;
+      if (auth.user) {
+        const remote = await readState(cloud, user.id);
+        let cached;
+        try { cached = JSON.parse(localStorage.getItem(storageKey())); } catch { /* No recovery cache. */ }
+        S = remote?.state || initialState();
+        const revision = remote?.revision || 0;
+        sync = new StateSync({
+          revision,
+          write: async (state, expected) => {
+            const { data } = await cloud.auth.getSession();
+            if (data.session?.user.id !== user.id) throw new Error('계정이 변경됐어요. 페이지를 새로고침해 주세요.');
+            return writeState(cloud, state, expected);
+          },
+          cache: (value) => {
+            try { localStorage.setItem(storageKey(), JSON.stringify(value)); }
+            catch { toast('이 기기에 임시 기록을 보관하지 못했어요. 서버 저장 상태를 확인해 주세요.'); }
+          },
+          status: syncStatus,
+        });
+        cloudReady = true;
+        if (cached?.dirty && cached.state) {
+          S = cached.state;
+          if (cached.revision !== revision) {
+            sync.conflict = true;
+            sync.pending = structuredClone(S);
+            syncStatus('conflict', '다른 기기의 기록과 미저장 변경이 달라요. 백업 후 최신 기록을 불러와 주세요.');
+          } else sync.queue(S);
+        } else if (!remote) {
+          sync.queue(S);
+          await sync.flush();
+        } else syncStatus('saved');
+      } else S = load();
+      // Never await Supabase calls inside this callback; its auth lock is held.
+      cloud.auth.onAuthStateChange((_event, session) => {
+        if ((session?.user.id || null) !== (auth.user?.id || null)) setTimeout(() => location.reload(), 0);
+      });
+    } else S = load();
+  } catch (error) {
+    bootError = error.message || '기록을 불러오지 못했어요. 다시 시도해 주세요.';
+  }
+  auth.loading = false;
+  applyPrefs(); render();
+  if (!bootError) maybeNotify();
+}
+
+function syncStatus(status, message = '') {
+  const node = $('#sync-status');
+  node.hidden = false;
+  node.dataset.state = status;
+  const labels = { pending: '저장 대기 중', saving: '계정에 저장 중', saved: '계정에 저장됨' };
+  node.innerHTML = `<span role="status">${esc(message || labels[status] || '저장하지 못했어요.')}</span>${['error', 'conflict'].includes(status)
+    ? `${status === 'error' ? '<button class="btn small secondary" data-act="retry-sync">저장 재시도</button>' : ''}<button class="btn small secondary" data-act="backup">백업</button><button class="btn small secondary" data-act="reload-cloud">최신 기록 불러오기</button>` : ''}`;
+}
+
+window.addEventListener('online', () => { if (!sync?.conflict) sync?.flush().catch(() => {}); });
+window.addEventListener('beforeunload', (event) => {
+  if (sync?.pending) { event.preventDefault(); event.returnValue = ''; }
+});
+
+await initAuth();
 fetch('/api/status').then((r) => r.json()).then((s) => { if (s.demo) { ui.demo = true; renderTop(); } }).catch(() => {});
