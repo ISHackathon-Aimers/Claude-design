@@ -1,11 +1,11 @@
 :root {
   --font: 'Pretendard Variable', Pretendard, -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
-  --bg: #ffffff;
+  --bg: #f3f4f7;
   --surface: #ffffff;
-  --surface-2: #f6f6f8;
+  --surface-2: #f5f6f8;
   --text: #111114;
-  --text-2: #5b5d66;
-  --border: #e6e6ea;
+  --text-2: #515865;
+  --border: #dce0e7;
   --primary: #e11d48;
   --primary-ink: #ffffff;
   --primary-soft: #fff1f2;
@@ -33,8 +33,8 @@
     --surface: #16161c;
     --surface-2: #1f1f27;
     --text: #f2f2f5;
-    --text-2: #a6a8b3;
-    --border: #2c2c36;
+    --text-2: #b5b8c4;
+    --border: #373946;
     --primary: #fb7185;
     --primary-ink: #1a0509;
     --primary-soft: #3a1520;
@@ -53,8 +53,8 @@
   --surface: #16161c;
   --surface-2: #1f1f27;
   --text: #f2f2f5;
-  --text-2: #a6a8b3;
-  --border: #2c2c36;
+  --text-2: #b5b8c4;
+  --border: #373946;
   --primary: #fb7185;
   --primary-ink: #1a0509;
   --primary-soft: #3a1520;
@@ -74,7 +74,7 @@ body {
   margin: 0;
   font-family: var(--font);
   font-size: 1rem;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text);
   background: var(--surface-2);
   word-break: keep-all;
@@ -115,8 +115,8 @@ button { cursor: pointer; }
 .badge { font-size: 0.75rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 
 main {
-  padding: 16px 16px calc(var(--tab-h) + 32px + env(safe-area-inset-bottom));
-  display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px;
+  padding: 24px 16px calc(var(--tab-h) + 40px + env(safe-area-inset-bottom));
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px;
   outline: none;
 }
 
@@ -147,14 +147,14 @@ main {
 
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px; display: grid; gap: 10px;
+  padding: 20px; display: grid; gap: 16px;
 }
 .eyebrow { font-size: 0.8125rem; font-weight: 600; color: var(--text-2); }
 .muted { color: var(--text-2); }
 .help { font-size: 0.875rem; color: var(--text-2); }
 .lead { color: var(--text-2); }
-h2 { font-size: 1.125rem; font-weight: 700; }
-h3 { font-size: 1.0625rem; font-weight: 700; }
+h2 { font-size: 1.25rem; font-weight: 750; line-height: 1.4; letter-spacing: -0.02em; }
+h3 { font-size: 1.0625rem; font-weight: 700; line-height: 1.45; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -239,7 +239,7 @@ h3 { font-size: 1.0625rem; font-weight: 700; }
 .ok { background: var(--ok-soft); color: var(--ok); }
 .warn { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.stats div { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 8px; text-align: center; display: grid; }
+.stats div { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 8px; text-align: center; display: grid; gap: 4px; }
 .stats strong { font-size: 1.25rem; }
 .stats span { font-size: 0.8125rem; color: var(--text-2); }
 .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -282,7 +282,7 @@ input[type="text"], input[type="date"], input:not([type]), select, textarea {
 }
 textarea { resize: vertical; line-height: 1.55; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); outline-offset: 0; border-color: transparent; }
-.field { display: grid; gap: 6px; }
+.field { display: grid; gap: 8px; }
 .inline { display: flex; gap: 8px; }
 .inline input { flex: 1; min-height: 40px; padding: 8px 12px; }
 .error { color: var(--danger); font-size: 0.875rem; font-weight: 600; }
@@ -595,7 +595,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); min-height: 44p
 .chip.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); font-weight: 600; }
 .result-line { font-size: 0.875rem; color: var(--text-2); }
 .result-line strong { color: var(--text); }
-.rec-list { display: grid; gap: 16px; }
+.rec-list { display: grid; gap: 20px; }
 
 /* 대시보드: 고른 날짜와 그날 기록 */
 .day[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); }
@@ -631,6 +631,7 @@ button.more { border: 0; background: none; padding: 0; cursor: pointer; }
 
 /* 기록 카드 ⋯ 메뉴 */
 .entry { position: relative; }
+.entry .pre { line-height: 1.75; }
 .entry .entry-meta { align-items: center; }
 .meta-right { display: inline-flex; align-items: center; gap: 2px; }
 .entry-menu-wrap { position: relative; margin-right: -10px; }
