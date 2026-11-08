@@ -18,7 +18,7 @@
   --danger: #dc2626;
   --ring: #e11d48;
   --radius: 16px;
-  --tab-h: 64px;
+  --tab-h: 72px;
   --app-w: 480px;
   --top-h: 56px;
   --dur: 180ms;
@@ -121,20 +121,29 @@ main {
 }
 
 .tabbar {
-  position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
-  width: 100%; max-width: var(--app-w); z-index: 10;
-  height: calc(var(--tab-h) + env(safe-area-inset-bottom));
-  padding-bottom: env(safe-area-inset-bottom);
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  background: var(--bg); border-top: 1px solid var(--border);
+  position: fixed; bottom: calc(12px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  width: calc(100% - 32px); max-width: calc(var(--app-w) - 32px); z-index: 10;
+  min-height: var(--tab-h); padding: 6px;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  border: 1px solid var(--border); border-radius: 30px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.12), 0 2px 6px rgb(0 0 0 / 0.04);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
 }
 .tabbar a {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  font-size: 0.6875rem; color: var(--text-2); min-height: 48px;
-  transition: color var(--dur);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  font-size: 0.6875rem; line-height: 1.2; color: var(--text-2); min-height: 58px; min-width: 0; padding: 8px 4px;
+  border-radius: 23px; -webkit-tap-highlight-color: transparent;
+  transition: color var(--dur), background-color var(--dur), transform var(--dur);
 }
-.tabbar a[aria-current="page"] { color: var(--text); font-weight: 700; }
+.tabbar a span { max-width: 100%; text-align: center; }
+.tabbar a[aria-current="page"] { color: var(--text); font-weight: 700; background: var(--primary-soft); }
 .tabbar a[aria-current="page"] .ic { stroke-width: 2.5; color: var(--primary); }
+.tabbar a:focus-visible { outline-offset: -3px; border-radius: 23px; }
+.tabbar a:active { transform: scale(0.95); }
+@media (hover: hover) {
+  .tabbar a:not([aria-current="page"]):hover { color: var(--text); background: var(--surface-2); }
+}
 
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -325,7 +334,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); min-height: 44p
 .lock { display: grid; justify-items: center; gap: 8px; padding: 24px; color: var(--text-2); text-align: center; }
 
 .toast {
-  position: fixed; left: 50%; bottom: calc(var(--tab-h) + 16px + env(safe-area-inset-bottom));
+  position: fixed; left: 50%; bottom: calc(var(--tab-h) + 24px + env(safe-area-inset-bottom));
   transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
   max-width: min(440px, calc(100% - 32px)); width: max-content;
   background: var(--text); color: var(--bg); padding: 12px 16px; border-radius: 12px;
@@ -588,7 +597,8 @@ button.more { border: 0; background: none; padding: 0; cursor: pointer; }
   .tabbar {
     left: 0; bottom: 0; top: 0; transform: none; width: var(--rail-w); max-width: none; height: auto;
     padding: 24px 12px; display: flex; flex-direction: column; gap: 4px;
-    border-top: 0; border-right: 1px solid var(--border);
+    border: 0; border-right: 1px solid var(--border); border-radius: 0;
+    background: var(--bg); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
   }
   .tabbar a { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 0 16px; border-radius: 12px; font-size: 1rem; min-height: 48px; }
   .tabbar a:hover { background: var(--surface-2); }
