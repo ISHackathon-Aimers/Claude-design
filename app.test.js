@@ -12,10 +12,12 @@ async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); }
   assert.fail('UI did not reach the expected state');
 }
-async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false, plan = 'free', failMembership = false } = {}) {
+async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false, plan = 'free', failMembership = false, initialRoute = 'profile', pauseMembership = false, failAiHistory = false } = {}) {
   const html = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
-  const dom = new JSDOM(html, { url: 'http://localhost:3000/#/profile' });
-  t.after(() => dom.window.close());
+  const dom = new JSDOM(html, { url: `http://localhost:3000/#/${initialRoute}` });
+  let releaseMembership;
+  const membershipGate = pauseMembership ? new Promise((resolve) => { releaseMembership = resolve; }) : null;
+  t.after(() => { releaseMembership?.(); dom.window.close(); });
   for (const key of ['window', 'document', 'location', 'history', 'localStorage']) globalThis[key] = dom.window[key];
   globalThis.confirm = () => true;
   dom.window.HTMLDialogElement.prototype.close = function () {
@@ -35,6 +37,8 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
   let reads = 0;
   let testPushes = 0;
   let canceled = false;
+  let membershipReads = 0;
+  let aiHistoryReads = 0;
   const session = { enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } };
   t.mock.method(sessionManager, 'initialize', async () => { if (failAuth) throw Object.assign(new Error('로그인 복원 실패'), { status: failAuth === 'expired' ? 401 : 503 }); return session; });
   t.mock.method(sessionManager, 'current', async () => session);
@@ -46,10 +50,10 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     categories: ['프로젝트'], entries: [{ id: 'old1', date: '2025-10-01', category: '동아리', title: '옛 기록', summary: '요약', raw: '원문', tags: ['협업'], qa: [] }], groups: [], pokes: {} }));
   globalThis.fetch = async (url, options = {}) => {
     if (url === '/api/push/test') { testPushes++; return Response.json({ sent: 1, failed: 0, expired: 0 }); }
-    if (url === '/api/membership') return failMembership ? Response.json({ error: 'Unavailable' }, { status: 500 }) : Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false });
+    if (url === '/api/membership') { membershipReads++; if (membershipGate) await membershipGate; return failMembership ? Response.json({ error: 'Unavailable' }, { status: 500 }) : Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false }); }
     if (url === '/api/membership/cancel') { canceled = true; return Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false }); }
     if (url === '/api/auth/session') return Response.json({ enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } });
-    if (url === '/api/ai/history') return Response.json({ runs: [] });
+    if (url === '/api/ai/history') { aiHistoryReads++; return failAiHistory ? Response.json({ error: 'History unavailable' }, { status: 503 }) : Response.json({ runs: [{ task: 'followup', result: { data: {} } }] }); }
     if (url === '/api/status') return Response.json({ demo: true });
     if (url === '/api/ai') {
       const { task } = JSON.parse(options.body);
@@ -78,10 +82,87 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     field.value = name; field.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   }
   return { dom, changeName, writes, get state() { return state; }, get reads() { return reads; }, get testPushes() { return testPushes; },
+    releaseMembership, get membershipReads() { return membershipReads; }, get aiHistoryReads() { return aiHistoryReads; },
     offline: (value) => { failSave = value; }, conflict: () => { stale = true; },
     pauseNextSave: () => { let release; pause = new Promise((resolve) => { release = resolve; }); return () => release(); },
   };
 }
+
+test('UI: dashboard renders without membership or history requests, and paid routes wait safely for one deduplicated lookup', { timeout: 30000 }, async (t) => {
+  const a = await app(t, { initialRoute: 'dashboard', pauseMembership: true, plan: 'annual' });
+  assert.ok(document.querySelector('[data-act="day-record"]'));
+  assert.equal(a.membershipReads, 0); assert.equal(a.aiHistoryReads, 0);
+  location.hash = '#/services';
+  await until(() => document.querySelector('#membership-loading'));
+  assert.equal(document.querySelector('.premium-hero'), null);
+  assert.equal(document.querySelector('.svc'), null);
+  window.dispatchEvent(new a.dom.window.HashChangeEvent('hashchange'));
+  await tick();
+  assert.equal(a.membershipReads, 1);
+  a.releaseMembership();
+  await until(() => document.querySelector('.svc'));
+  assert.equal(document.querySelector('#membership-loading'), null);
+});
+
+test('UI: a slow plan lookup does not delay the profile or replace a focused draft when it resolves', { timeout: 30000 }, async (t) => {
+  const a = await app(t, { pauseMembership: true });
+  const field = document.querySelector('#pf-name');
+  assert.ok(field);
+  assert.equal(field.disabled, false);
+  assert.match(document.querySelector('#membership-slot').textContent, /요금제를 확인/);
+  field.focus(); field.value = 'Unsaved draft';
+  a.releaseMembership();
+  await until(() => document.querySelector('.membership-card'));
+  assert.equal(document.querySelector('#pf-name'), field);
+  assert.equal(field.value, 'Unsaved draft');
+  assert.equal(document.activeElement, field);
+  assert.equal(a.aiHistoryReads, 0);
+});
+
+test('UI: foreground checks throttle duplicate reads and do not wait for a pending membership lookup', { timeout: 30000 }, async (t) => {
+  const a = await app(t, { pauseMembership: true });
+  const field = document.querySelector('#pf-name');
+  const initialReads = a.reads;
+  window.dispatchEvent(new a.dom.window.Event('focus'));
+  await tick();
+  assert.equal(a.reads, initialReads);
+  const later = Date.now() + 16000;
+  t.mock.method(Date, 'now', () => later);
+  window.dispatchEvent(new a.dom.window.Event('focus'));
+  await until(() => a.reads === initialReads + 1);
+  await tick();
+  assert.equal(document.querySelector('#pf-name'), field);
+  assert.equal(a.membershipReads, 1);
+  a.releaseMembership();
+  await until(() => document.querySelector('.membership-card'));
+});
+
+test('UI: export fetches history on demand and still exports records if history is unavailable', async (t) => {
+  const a = await app(t, { failAiHistory: true });
+  let downloaded;
+  t.mock.method(URL, 'createObjectURL', (blob) => { downloaded = blob; return 'blob:test-export'; });
+  t.mock.method(a.dom.window.HTMLAnchorElement.prototype, 'click', () => {});
+  assert.equal(a.aiHistoryReads, 0);
+  document.querySelector('[data-act="export-data"]').click();
+  await until(() => downloaded);
+  const data = JSON.parse(await downloaded.text());
+  assert.equal(a.aiHistoryReads, 1);
+  assert.equal(data.state.profile.name, 'DB User');
+  assert.match(data.aiHistoryError, /AI 활동/);
+});
+
+test('UI: export includes freshly fetched AI history without reading it during startup', async (t) => {
+  const a = await app(t);
+  let downloaded;
+  t.mock.method(URL, 'createObjectURL', (blob) => { downloaded = blob; return 'blob:test-export'; });
+  t.mock.method(a.dom.window.HTMLAnchorElement.prototype, 'click', () => {});
+  assert.equal(a.aiHistoryReads, 0);
+  document.querySelector('[data-act="export-data"]').click();
+  await until(() => downloaded);
+  const data = JSON.parse(await downloaded.text());
+  assert.equal(data.aiRuns[0].task, 'followup');
+  assert.equal(data.aiHistoryError, undefined);
+});
 
 test('UI: free users see pricing on every AIMers+ route and retain profile editing', async (t) => {
   await app(t);
@@ -229,6 +310,7 @@ test('UI: record creation retains its draft on failure and retry never duplicate
   raw.value = 'My original experience'; raw.dispatchEvent(new a.dom.window.Event('input', { bubbles: true }));
   document.querySelector('[data-act="rec-next"]').click();
   await until(() => document.querySelector('[data-act="rec-save"]'));
+  assert.equal(a.aiHistoryReads, 0); // AI results must not wait for an additional history request.
   a.offline(true); document.querySelector('[data-act="rec-save"]').click();
   await until(() => document.querySelector('#sheet .error'));
   assert.equal(a.state.entries.length, 0);

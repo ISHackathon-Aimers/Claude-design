@@ -11,7 +11,8 @@ const auth = { loading: true, enabled: false, user: null, error: '', busy: false
 const membership = { data: null, loading: false, error: '', busy: false, generation: 0 };
 const sync = { ready: false, revision: 0, generation: 0, pending: null, saving: null, error: '', conflict: false };
 let legacyState = null;
-let aiRuns = [];
+let lastDataCheck = 0;
+let membershipRequest = null;
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s = '') => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -135,13 +136,30 @@ async function api(url, { method = 'GET', body } = {}) {
   return data;
 }
 
-async function refreshMembership() {
-  if (membership.busy) return;
+function refreshMembership() {
+  if (membership.busy) return Promise.resolve();
+  if (membershipRequest) return membershipRequest;
   const generation = ++membership.generation;
   membership.loading = true; membership.error = '';
-  try { const data = await api('/api/membership'); if (generation === membership.generation) membership.data = data; }
-  catch { if (generation === membership.generation) { membership.data = null; membership.error = '요금제 정보를 불러오지 못했어요. 잠시 후 다시 확인해 주세요.'; } }
-  finally { if (generation === membership.generation) membership.loading = false; }
+  membershipRequest = (async () => {
+    try { const data = await api('/api/membership'); if (generation === membership.generation) membership.data = data; }
+    catch { if (generation === membership.generation) { membership.data = null; membership.error = '요금제 정보를 불러오지 못했어요. 잠시 후 다시 확인해 주세요.'; } }
+    finally { if (generation === membership.generation) membership.loading = false; membershipRequest = null; }
+  })();
+  return membershipRequest;
+}
+
+const needsMembership = () => ['profile', 'services'].includes(route()[0]);
+function updateMembershipView() {
+  if (auth.loading || !sync.ready) return;
+  const slot = $('#membership-slot');
+  if (slot) slot.innerHTML = membershipCard();
+  if (route()[0] === 'services' && (!premium() || $('#membership-loading') || $('.premium-hero'))) render();
+}
+function ensureMembership() {
+  if (auth.user && needsMembership() && !membership.data && !membership.loading && !membership.error) {
+    void refreshMembership().then(updateMembershipView);
+  }
 }
 
 const premium = () => Boolean(auth.user && hasPremium(membership.data));
@@ -269,7 +287,6 @@ async function ai(task, input) {
   if (!res.ok || body.error) throw new Error(body.error || '요청에 실패했어요.');
   if (body.demo && !ui.demo) { ui.demo = true; renderTop(); }
   if (body.note) toast(body.note);
-  try { aiRuns = (await api('/api/ai/history')).runs; } catch { /* AI 결과는 전달하고 활동 목록은 다음 로드에서 다시 읽는다. */ }
   return body.data;
 }
 
@@ -843,7 +860,7 @@ function profile() {
   const lvl = fireLevel(s.streak);
   return {
     title: '개인 프로필', back: 'history',
-    html: `${accountCard()}${membershipCard()}${pwaCard()}<section class="profile-top">
+    html: `${accountCard()}<div id="membership-slot">${membershipCard()}</div><div id="pwa-slot">${pwaCard()}</div><section class="profile-top">
       ${fireRing(me(), s.streak)}
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
       <input type="file" id="pf-photo" accept="image/*" class="sr-only" data-pf="photo">
@@ -980,7 +997,10 @@ const route = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean
 
 function view() {
   const [tab = 'dashboard', a, b, c] = route();
-  if (tab === 'services') return premium() ? ({ services, interview, match, insight }[a || 'services']?.() || services()) : premiumWelcome();
+  if (tab === 'services') {
+    if (auth.user && !membership.data && !membership.error) return { title: 'AIMers+', html: `<div id="membership-loading">${loadingMarkup('AIMers+를 준비하고 있어요', '현재 요금제를 확인하고 있어요.')}</div>` };
+    return premium() ? ({ services, interview, match, insight }[a || 'services']?.() || services()) : premiumWelcome();
+  }
   if (tab === 'groups') {
     const g = S.groups.find((x) => x.id === a);
     if (!g) return groups();
@@ -1017,6 +1037,7 @@ function render(scroll = false) {
   window.clearTimeout(pokeTimer);
   if (auth.restoreError) return;
   if (auth.loading || (auth.user && !sync.ready)) return;
+  ensureMembership();
   current = view();
   renderTop();
   $('#main').innerHTML = current.html;
@@ -1095,8 +1116,14 @@ const actions = {
     if ((sync.pending || sync.saving) && !(await ask('저장하지 못한 변경 내용이 사라져요. 먼저 내보내기로 보관했나요?', '다시 불러오기', true))) return;
     location.reload();
   },
-  'export-data': () => {
-    const blob = new Blob([JSON.stringify({ user: auth.user, state: S, aiRuns }, null, 2)], { type: 'application/json' });
+  'export-data': async (el) => {
+    if (el.disabled) return;
+    el.disabled = true;
+    let aiRuns = []; let aiHistoryError = '';
+    try { if (auth.user) aiRuns = (await api('/api/ai/history')).runs; }
+    catch { aiHistoryError = 'AI 활동을 불러오지 못해 기록과 설정만 내보냈어요.'; toast(aiHistoryError); }
+    finally { el.disabled = false; }
+    const blob = new Blob([JSON.stringify({ user: auth.user, state: S, aiRuns, ...(aiHistoryError ? { aiHistoryError } : {}) }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a'); link.href = url; link.download = `aimers-${todayStr()}.json`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -1435,11 +1462,11 @@ async function initAuth() {
   url.searchParams.delete('auth'); url.searchParams.delete('auth_error');
   history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
   if (auth.user) {
+    ensureMembership();
     try {
       $('#main').innerHTML = loadingMarkup('기록을 불러오고 있어요', '지난 경험과 설정을 가져오는 중이에요.');
       await refreshData();
-      await refreshMembership();
-      aiRuns = (await api('/api/ai/history')).runs;
+      lastDataCheck = Date.now();
       try {
         const previous = JSON.parse(localStorage.getItem(`${KEY}:google:${auth.user.googleSub}`) || localStorage.getItem(KEY));
         if (previous?.v === 1) legacyState = previous;
@@ -1466,11 +1493,16 @@ async function resumeSession() {
       if (sync.pending || sync.saving) { sync.error = '로그인 계정이 변경됐어요. 변경 내용을 내보낸 뒤 새로고침해 주세요.'; renderSync(); }
       else location.reload();
     } else if (auth.user && sync.ready && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {
-      await refreshMembership();
+      // Repeated focus/pageshow events should not repeat the same remote reads.
+      if (Date.now() - lastDataCheck < 15_000) return;
+      lastDataCheck = Date.now();
+      if (needsMembership()) void refreshMembership().then(updateMembershipView);
       const generation = sync.generation;
       const data = await api('/api/state');
       if (generation === sync.generation && data.revision >= sync.revision && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {
-        S = data.state; sync.revision = data.revision; applyPrefs(); render();
+        const changed = data.revision > sync.revision || JSON.stringify([data.state.groups, data.state.pokes, data.state.notifications]) !== JSON.stringify([S.groups, S.pokes, S.notifications]);
+        S = data.state; sync.revision = data.revision;
+        if (changed) { applyPrefs(); render(); }
       }
     }
   } catch { /* Keep the current session and unsaved edits on temporary network errors. */ }
@@ -1485,5 +1517,10 @@ window.addEventListener('beforeunload', (ev) => {
 });
 
 await initAuth();
-await pwa.start(api, auth.user, () => { if (route()[0] === 'profile') render(); });
+void pwa.start(api, auth.user, () => {
+  const slot = $('#pwa-slot');
+  if (slot) slot.innerHTML = pwaCard();
+  const notify = $('#pf-notify');
+  if (notify) notify.disabled = !auth.user || !pwa.state.subscribed;
+});
 fetch('/api/status').then((r) => r.json()).then((s) => { if (s.demo) { ui.demo = true; renderTop(); } }).catch(() => {});
