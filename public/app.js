@@ -924,6 +924,7 @@ function render(scroll = false) {
   current = view();
   renderTop();
   $('#main').innerHTML = current.html;
+  $('#main').dataset.view = route()[0] || 'dashboard';
   updateRecords();
   const chips = $('#main .chips');
   const picked = chips && $('[aria-pressed="true"]', chips);
