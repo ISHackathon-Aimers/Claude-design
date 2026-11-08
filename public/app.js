@@ -67,9 +67,10 @@ function seed() {
   const fillers = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11].map((w, i) =>
     e(w * 7 - 2, '전공공부', study[i], `${study[i]}을(를) 공부했다. 수업 내용을 복습하고 노트에 정리했다.`,
       `${study[i]}을(를) 공부하고 핵심 개념을 노트에 정리했습니다.`, i % 3 ? ['전공 역량'] : ['전공 역량', '성실성']));
-  const member = (name, color, isPublic, doneNow, streak, entries) => ({
-    id: uid(), name, color, public: isPublic, periodDays: 7, startDate: start,
-    lastEntryDate: ago(doneNow ? 0 : 3), streak, entries: entries.map(([d, category, title, summary]) => ({ id: uid(), date: ago(d), category, title, summary, tags: [] })),
+  // 멤버마다 기록 주기(days)와 시작일이 다르다. 완료 여부는 각자의 이번 기간에 마지막 기록(lastAgo일 전)이 들어 있는지로 정해진다.
+  const member = (name, color, isPublic, { days, startAgo, lastAgo }, streak, entries) => ({
+    id: uid(), name, color, public: isPublic, periodDays: days, startDate: ago(startAgo),
+    lastEntryDate: ago(lastAgo), streak, entries: entries.map(([d, category, title, summary]) => ({ id: uid(), date: ago(d), category, title, summary, tags: [] })),
   });
   return {
     v: 1,
@@ -80,18 +81,18 @@ function seed() {
       {
         id: uid(), name: '정보시스템학과 24학번', code: 'IS24AM',
         members: [
-          member('이지민', '#7c3aed', true, true, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.'], [9, '전공공부', '경영정보시스템 중간고사', 'ERP 개념을 정리하며 중간고사를 준비했습니다.']]),
-          member('박서연', '#0891b2', true, false, 4, [[3, '프로젝트', '앱 프로젝트 UI 설계', '팀 앱 프로젝트에서 피그마로 화면 6개를 설계했습니다.']]),
-          member('최도윤', '#ca8a04', true, true, 22, [[0, '대외활동', '빅데이터 교육 수료', '8주 빅데이터 교육을 수료하고 미니 프로젝트를 발표했습니다.'], [7, '동아리', '밴드 동아리 공연', '공연 기획에서 무대 순서 조율을 맡았습니다.']]),
-          member('정하준', '#16a34a', false, false, 0, [[30, '전공공부', '회계원리 복습', '회계원리 분개를 복습했습니다.']]),
-          member('한유나', '#db2777', true, false, 8, [[3, '대외활동', '봉사활동 기획', '지역아동센터 코딩 교실 커리큘럼을 짰습니다.']]),
+          member('이지민', '#7c3aed', true, { days: 7, startAgo: 420, lastAgo: 0 }, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.'], [9, '전공공부', '경영정보시스템 중간고사', 'ERP 개념을 정리하며 중간고사를 준비했습니다.']]),
+          member('박서연', '#0891b2', true, { days: 14, startAgo: 424, lastAgo: 6 }, 4, [[6, '프로젝트', '앱 프로젝트 UI 설계', '팀 앱 프로젝트에서 피그마로 화면 6개를 설계했습니다.']]),
+          member('최도윤', '#ca8a04', true, { days: 7, startAgo: 423, lastAgo: 1 }, 22, [[1, '대외활동', '빅데이터 교육 수료', '8주 빅데이터 교육을 수료하고 미니 프로젝트를 발표했습니다.'], [8, '동아리', '밴드 동아리 공연', '공연 기획에서 무대 순서 조율을 맡았습니다.']]),
+          member('정하준', '#16a34a', false, { days: 30, startAgo: 445, lastAgo: 30 }, 0, [[30, '전공공부', '회계원리 복습', '회계원리 분개를 복습했습니다.']]),
+          member('한유나', '#db2777', true, { days: 7, startAgo: 426, lastAgo: 8 }, 8, [[8, '대외활동', '봉사활동 기획', '지역아동센터 코딩 교실 커리큘럼을 짰습니다.']]),
         ],
       },
       {
         id: uid(), name: '데이터 공모전 팀', code: 'DATA4U',
         members: [
-          member('이지민', '#7c3aed', true, true, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.']]),
-          member('오세훈', '#ea580c', true, false, 2, [[4, '프로젝트', '시각화 대시보드', '공모전 결과를 대시보드로 만들었습니다.']]),
+          member('이지민', '#7c3aed', true, { days: 7, startAgo: 420, lastAgo: 0 }, 15, [[0, '대외활동', '교내 홍보단 면접', '교내 홍보단 면접을 보고 자기소개를 준비했습니다.']]),
+          member('오세훈', '#ea580c', true, { days: 14, startAgo: 430, lastAgo: 12 }, 2, [[12, '프로젝트', '시각화 대시보드', '공모전 결과를 대시보드로 만들었습니다.']]),
         ],
       },
     ],
@@ -153,13 +154,23 @@ function myStats() {
   const [ps, pe] = periodRange(Math.max(info.current, 0), p.startDate, p.periodDays);
   return { ...info, ps, pe, left: info.current < 0 ? 0 : daysLeft(today, p.startDate, p.periodDays) };
 }
+// 그룹 규칙: 멤버마다 자기 작성 주기·시작일로 '이번 기간'을 따로 계산한다. 그 기간에 기록이 없으면 미작성(콕 찌르기 대상).
+const PERIOD_NAMES = { 7: '매주', 14: '2주마다', 30: '한 달마다' };
+const periodName = (d) => PERIOD_NAMES[d] || `${d}일마다`;
 function memberStatus(m) {
-  if (m.me) { const s = myStats(); return { done: s.doneNow, streak: s.streak }; }
-  const cur = periodIndex(todayStr(), m.startDate, m.periodDays);
-  return { done: periodIndex(m.lastEntryDate, m.startDate, m.periodDays) === cur, streak: m.streak };
+  if (m.me) { const s = myStats(); return { done: s.doneNow, streak: s.streak, left: s.left, days: S.profile.periodDays }; }
+  const today = todayStr();
+  const cur = periodIndex(today, m.startDate, m.periodDays);
+  return { done: periodIndex(m.lastEntryDate, m.startDate, m.periodDays) === cur, streak: m.streak, left: daysLeft(today, m.startDate, m.periodDays), days: m.periodDays };
 }
 const me = () => ({ id: 'me', me: true, name: S.profile.name, color: '#e11d48', photo: S.profile.photo, public: S.profile.public });
 const avatar = (m) => `<span class="avatar" style="background:${esc(m.color)}">${m.photo ? `<img src="${m.photo}" alt="">` : esc((m.name || '?').slice(0, 1))}</span>`;
+// 연속 기록이 10회·20회를 넘으면 프로필에 불꽃 테두리와 연속 횟수 배지가 붙는다
+function fireRing(m, streak, cls = '') {
+  const lvl = fireLevel(streak);
+  const badge = lvl ? `<span class="fire-badge" aria-hidden="true">${icon('flame', 12)}${cls === 'sm' ? '' : streak}</span>` : '';
+  return `<span class="ring ${cls} fire-${lvl}">${avatar(m)}${badge}</span>`;
+}
 const durationText = (periods, len) => {
   const days = periods * len;
   return len % 30 === 0 ? `${periods * (len / 30)}개월` : `${Math.round(days / 7)}주`;
@@ -223,11 +234,11 @@ function dashboard() {
       <time datetime="${e.date}">${fmtMD(e.date)}</time></a></li>`).join('')}</ul>` : '<p class="muted">아직 기록이 없어요. 첫 한 걸음을 남겨 보세요.</p>'}
   </section>`;
 
-  // 부가 서비스 미리보기: 가장 많이 쌓인 역량 한 줄 + 바로 가기
+  // AIMers+ 미리보기: 가장 많이 쌓인 역량 한 줄 + 바로 가기
   const counts = axisCounts(S.entries);
   const topAxis = AXES[counts.indexOf(Math.max(...counts))];
   const tile = (href, ic, label) => `<a class="tile" href="${href}"><span class="nav-ic">${icon(ic, 22)}</span><span>${label}</span></a>`;
-  const servicesBox = `<section class="card">${head('부가 서비스', '#/services')}
+  const servicesBox = `<section class="card">${head('AIMers+', '#/services')}
     ${S.entries.length ? `<p class="help">지금까지 가장 많이 쌓인 역량은 <strong class="hl">${topAxis.key}</strong>이에요.</p>` : ''}
     <div class="tiles">${tile('#/services/interview', 'chat', '면접 예상 질문')}${tile('#/services/match', 'search', '자소서 경험 검색')}${tile('#/services/insight', 'trend', '성장 인사이트')}</div>
   </section>`;
@@ -254,7 +265,7 @@ function dashboard() {
   };
 }
 
-// ───────── 4번 탭: 내 기록 ─────────
+// ───────── 2번 탭: 내 기록 ─────────
 function records() {
   const cats = [...new Set([...S.categories, ...S.entries.map((e) => e.category)])];
   const shown = S.entries.filter((e) => ui.cat === 'all' || e.category === ui.cat).sort((a, b) => b.date.localeCompare(a.date));
@@ -342,16 +353,33 @@ async function summarize() {
   r.loading = false; renderSheet();
 }
 
-// ───────── 2번 탭: 부가 서비스 ─────────
+// ───────── 4번 탭: AIMers+ (기록을 활용하는 AI 서비스) ─────────
 const needEntries = () => (S.entries.length ? '' : `<div class="card empty"><p>먼저 경험을 기록해 주세요.</p><a class="btn primary" href="#/dashboard">기록하러 가기</a></div>`);
 
 function services() {
-  const item = (href, ic, title, desc) => `<a class="card nav-card" href="${href}"><span class="nav-ic">${icon(ic, 24)}</span><span><strong>${title}</strong><small>${desc}</small></span>${icon('next')}</a>`;
+  const n = S.entries.length;
+  const counts = axisCounts(S.entries);
+  const top = n ? AXES[counts.indexOf(Math.max(...counts))].key : '';
+  const svc = (href, ic, title, desc, steps, stat) => `<a class="card svc" href="${href}">
+    <span class="svc-head"><span class="nav-ic">${icon(ic, 24)}</span><strong>${title}</strong>${icon('next')}</span>
+    <span class="svc-desc">${desc}</span>
+    <ol class="svc-steps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol>
+    ${stat ? `<span class="svc-stat">${stat}</span>` : ''}</a>`;
   return {
-    html: `<p class="lead">지금까지 쌓은 ${S.entries.length}개의 기록으로 자소서와 면접을 준비해요.</p>
-    ${item('#/services/interview', 'chat', '면접 예상 질문', '내 경험으로 만든 질문에 답하고 피드백 받기')}
-    ${item('#/services/match', 'search', '자소서 문항 관련 경험 검색', '문항을 넣으면 가장 맞는 경험 찾기')}
-    ${item('#/services/insight', 'trend', '성장 인사이트', '학기별 활동과 달라진 점 한눈에 보기')}`,
+    html: `<section class="card plus-hero">
+      <span class="eyebrow">AIMers+</span>
+      <h2>쌓아 둔 기록을 취업 준비로</h2>
+      <p class="muted">지금까지 기록한 ${n}개의 경험을 AI가 읽고, 면접 연습과 자기소개서, 성장 정리에 바로 쓸 수 있게 도와줘요. 모든 결과는 내 기록에 적힌 내용만 근거로 해요.</p>
+    </section>
+    ${svc('#/services/interview', 'chat', '면접 예상 질문',
+      '내 기록을 바탕으로 실제 면접관이 물어볼 만한 질문을 만들어요. 답변을 쓰면 잘한 점과 보완할 점을 알려 줘요.',
+      ['카테고리나 역량 고르기', '질문을 골라 답변 쓰기', 'AI 피드백 확인하기'], n ? `연습할 수 있는 기록 ${n}개` : '')}
+    ${svc('#/services/match', 'search', '자소서 문항 관련 경험 검색',
+      '자기소개서 문항을 붙여 넣으면 쓰기 좋은 경험을 기록 속 실제 문장과 함께 찾아 줘요. 기록에 없는 내용은 지어내지 않아요.',
+      ['문항 붙여 넣기', '추천 경험과 근거 문장 확인', '눌러서 기록 전체 보기'], n ? `검색할 수 있는 기록 ${n}개` : '')}
+    ${svc('#/services/insight', 'trend', '성장 인사이트',
+      '학기별로 어떤 활동을 했는지 정리하고, 역량 육각형으로 어떤 능력이 자랐는지 한눈에 보여 줘요.',
+      ['역량 육각형 보기', '학기별 연대기 살펴보기', 'AI 성장 보고서 받기'], top ? `가장 많이 쌓인 역량: ${top}` : '')}`,
   };
 }
 
@@ -541,9 +569,10 @@ function groupDetail(g) {
   return {
     title: g.name, back: '#/groups',
     html: `<section class="card">
-      <div class="group-head"><span class="eyebrow">이번 기록 기간</span><button class="chip" data-act="copy" data-v="${esc(g.code)}">${icon('copy', 16)} 초대 코드 ${esc(g.code)}</button></div>
-      <p><strong>${ms.length}명 중 ${done}명</strong>이 이번 기간 기록을 마쳤어요.</p>
+      <div class="group-head"><span class="eyebrow">각자의 이번 기록 기간</span><button class="chip" data-act="copy" data-v="${esc(g.code)}">${icon('copy', 16)} 초대 코드 ${esc(g.code)}</button></div>
+      <p><strong>${ms.length}명 중 ${done}명</strong>이 자기 기간의 기록을 마쳤어요.</p>
       <div class="bar" role="img" aria-label="${ms.length}명 중 ${done}명 완료"><span style="width:${(done / ms.length) * 100}%"></span></div>
+      <p class="help">멤버마다 기록 주기와 시작일이 달라요. 자기 기간 안에 아직 기록하지 않은 멤버만 콕 찌를 수 있어요.</p>
       <p class="help">시연 버전에서는 초대 코드가 실제로 전송되지 않아요.</p>
     </section>
     <section class="card"><h2>멤버</h2><ul class="members">${ms.map((m) => {
@@ -551,9 +580,9 @@ function groupDetail(g) {
       const poked = !m.me && S.pokes[pokeKey(g, m)];
       return `<li class="member">
         <a class="member-link" href="${m.me ? '#/profile' : `#/groups/${g.id}/m/${m.id}`}">
-          <span class="ring fire-${fireLevel(st.streak)}">${avatar(m)}</span>
+          ${fireRing(m, st.streak)}
           <span class="m-info"><strong>${esc(m.name)}${m.me ? ' (나)' : ''}${m.public ? '' : ` ${icon('lock', 14)}`}</strong>
-          <small class="${st.done ? '' : 'late'}">${st.done ? '기록 완료' : '미작성'} · 연속 ${st.streak}회</small></span>
+          <small>${periodName(st.days)} 기록 · <span class="${st.done ? 'done-txt' : 'late'}">${st.done ? '완료' : `미작성 · ${st.left === 0 ? '오늘 마감' : `마감 D-${st.left}`}`}</span></small></span>
         </a>
         ${st.done ? '' : '<span class="alert-dot" role="img" aria-label="미작성">!</span>'}
         ${!st.done && !m.me ? `<button class="btn small ${poked ? 'secondary' : 'primary'}" data-act="poke" data-g="${g.id}" data-v="${m.id}" ${poked ? 'disabled' : ''}>${poked ? '찔렀어요' : '콕 찌르기'}</button>` : ''}
@@ -567,7 +596,7 @@ function memberView(g, m) {
   return {
     title: m.name, back: `#/groups/${g.id}`,
     html: `<section class="profile-top">
-      <span class="ring fire-${fireLevel(st.streak)}">${avatar(m)}</span>
+      ${fireRing(m, st.streak)}
       <h2>${esc(m.name)}</h2><p class="muted">연속 ${st.streak}회 기록 · ${esc(g.name)}</p>
       ${fireLevel(st.streak) ? `<span class="flame-note">${icon('flame', 18)} 프로필이 불타는 중</span>` : ''}
     </section>
@@ -585,7 +614,7 @@ function profile() {
   return {
     title: '개인 프로필', back: 'history',
     html: `<section class="profile-top">
-      <span class="ring fire-${lvl}">${avatar(me())}</span>
+      ${fireRing(me(), s.streak)}
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
       <input type="file" id="pf-photo" accept="image/*" class="sr-only" data-pf="photo">
       ${lvl ? `<span class="flame-note">${icon('flame', 18)} ${lvl === 2 ? '20회 연속! 프로필이 활활 불타요' : '10회 연속! 프로필이 불타기 시작했어요'}</span>` : ''}
@@ -602,8 +631,9 @@ function profile() {
     </section>
     <section class="card"><h2>기록 설정</h2>
       <label class="switch-row" for="pf-public"><span>기록 공개<small>그룹 친구가 내 기록을 볼 수 있어요</small></span><input type="checkbox" role="switch" id="pf-public" data-pf="public" ${p.public ? 'checked' : ''}></label>
-      <div class="field"><label for="pf-period">작성 기간</label><select id="pf-period" data-pf="periodDays">
-        ${[[7, '매주'], [14, '2주마다'], [30, '한 달마다']].map(([v, l]) => `<option value="${v}" ${p.periodDays === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><span class="label" id="period-l">작성 기간</span>
+        <div class="seg full" role="group" aria-labelledby="period-l">${[7, 14, 30].map((v) => `<button data-act="period" data-v="${v}" aria-pressed="${p.periodDays === v}">${periodName(v)}</button>`).join('')}</div>
+        <p class="help">${periodName(p.periodDays)} 한 번씩 기록해요. 이번 기간: ${fmtMD(s.ps)} ~ ${fmtMD(s.pe)}</p></div>
       <div class="field"><span class="label" id="pf-start-l">시작 날짜</span>
         <button type="button" class="date-btn" data-act="cal-start" aria-labelledby="pf-start-l pf-start-v">${icon('calendar')}<span id="pf-start-v">${fmtW(p.startDate)}</span></button></div>
       <label class="switch-row" for="pf-notify"><span>마감 알림<small>기간이 끝나기 2일 전부터 앱을 열면 알려 드려요</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''}></label>
@@ -734,7 +764,7 @@ function renderTop() {
     ? `<button class="icon-btn" data-act="go-back" aria-label="뒤로">${icon('back', 24)}</button>`
     : `<a class="icon-btn" href="${v.back}" aria-label="뒤로">${icon('back', 24)}</a>`;
   // 메인 화면에서는 오른쪽 위 프로필 사진으로 개인 프로필에 들어간다
-  const profileBtn = `<a class="top-avatar" href="#/profile" aria-label="개인 프로필"><span class="ring sm fire-${fireLevel(myStats().streak)}">${avatar(me())}</span></a>`;
+  const profileBtn = `<a class="top-avatar" href="#/profile" aria-label="개인 프로필">${fireRing(me(), myStats().streak, 'sm')}</a>`;
   $('#topbar').innerHTML = v.back
     ? `${backBtn}<h1>${esc(v.title)}</h1>${badge}`
     : `<h1 class="logo">AIM<b>ers</b></h1>${badge}${profileBtn}`;
@@ -766,6 +796,7 @@ const actions = {
   'cal-pick': (el) => { $('#cal').close(); cal.onPick?.(el.dataset.v); },
   'cal-close': () => $('#cal').close(),
   theme: (el) => { S.profile.theme = el.dataset.v; save(); applyPrefs(); render(); },
+  period: (el) => { S.profile.periodDays = Number(el.dataset.v); save(); render(); toast(`이제 ${periodName(S.profile.periodDays)} 기록해요.`); },
   'del-cat': async (el) => {
     const c = el.dataset.v;
     const n = S.entries.filter((e) => e.category === c).length;

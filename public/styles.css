@@ -463,3 +463,58 @@ input[type="range"] { width: 100%; accent-color: var(--primary); min-height: 44p
 .r-table td { font-variant-numeric: tabular-nums; }
 .r-table td.up { color: var(--ok); font-weight: 700; }
 .r-table tbody tr:last-child th, .r-table tbody tr:last-child td { border-bottom: 0; }
+
+/* 불타는 프로필: 천천히 도는 불꽃색 테두리 + 은은한 빛 + 연속 횟수 배지 */
+@property --fire-a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.ring { position: relative; }
+.ring.fire-1, .ring.fire-2 {
+  padding: 3px;
+  background: conic-gradient(from var(--fire-a), #ff1744, #ff9100, #ffc400, #ff9100, #ff1744);
+  animation: fire-spin 3s linear infinite;
+}
+.ring.fire-1 { box-shadow: 0 0 10px rgb(255 109 0 / 0.45); }
+.ring.fire-2 {
+  padding: 4px;
+  background: conic-gradient(from var(--fire-a), #ff1744, #ff6d00, #ffd600, #fff59d, #ffd600, #ff6d00, #ff1744);
+  animation-duration: 2s;
+  box-shadow: 0 0 16px rgb(255 109 0 / 0.7), 0 0 4px rgb(255 214 0 / 0.8);
+}
+.fire-badge {
+  position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 1px 7px 1px 5px; border-radius: 999px; border: 2px solid var(--bg);
+  background: linear-gradient(135deg, #ff9100, #ff1744); color: #fff;
+  font-size: 0.6875rem; font-weight: 800; line-height: 1.4; white-space: nowrap;
+}
+.fire-2 .fire-badge { background: linear-gradient(135deg, #ffd600, #ff6d00 45%, #ff1744); }
+.fire-badge .ic { fill: #fff3c4; stroke: #fff; stroke-width: 1.5; animation: flicker 0.9s ease-in-out infinite alternate; transform-origin: 50% 90%; }
+.profile-top .fire-badge { font-size: 0.875rem; padding: 2px 10px 2px 8px; bottom: -10px; }
+.profile-top .fire-badge .ic { width: 16px; height: 16px; }
+.ring.sm .fire-badge { left: auto; right: -5px; bottom: -4px; transform: none; padding: 1px; border-width: 1.5px; }
+.ring.sm .fire-badge .ic { width: 10px; height: 10px; }
+@keyframes fire-spin { to { --fire-a: 360deg; } }
+@keyframes flicker { from { transform: scale(0.9) rotate(-5deg); } to { transform: scale(1.1) rotate(4deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .ring.fire-1, .ring.fire-2, .fire-badge .ic { animation: none !important; }
+}
+.profile-top .ring.fire-1, .profile-top .ring.fire-2 { margin-bottom: 8px; }
+.member .ring.fire-1, .member .ring.fire-2 { margin-bottom: 6px; }
+
+/* AIMers+ 화면 */
+.plus-hero { background: linear-gradient(135deg, var(--primary-soft), var(--accent-soft)); border: 0; }
+.plus-hero .eyebrow { color: var(--primary); font-weight: 800; }
+.plus-hero h2 { font-size: 1.25rem; }
+.svc { gap: 12px; transition: border-color var(--dur); }
+.svc:active { border-color: var(--primary); }
+.svc-head { display: flex; align-items: center; gap: 12px; }
+.svc-head strong { flex: 1; font-size: 1.0625rem; }
+.svc-desc { color: var(--text-2); font-size: 0.9375rem; line-height: 1.55; }
+.svc-steps { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; counter-reset: step; }
+.svc-steps li {
+  counter-increment: step; display: grid; gap: 4px; padding: 10px 8px; border-radius: 12px;
+  background: var(--surface-2); font-size: 0.8125rem; font-weight: 600; line-height: 1.35;
+}
+.svc-steps li::before { content: counter(step); width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--primary); color: var(--primary-ink); font-size: 0.75rem; font-weight: 800; }
+.svc-stat { justify-self: start; font-size: 0.8125rem; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; }
+.done-txt { color: var(--ok); font-weight: 600; }
+#main:focus, #main:focus-visible { outline: none; }
