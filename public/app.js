@@ -1,7 +1,11 @@
 import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday } from './logic.js';
 
-// shortcut: 기록과 그룹은 이 브라우저(localStorage)에만 저장, 그룹 친구는 시연용 가상 사용자. 실제 서비스 전에 로그인·DB로 교체.
+// 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
+const auth = { loading: true, enabled: false, user: null, error: '', busy: false };
+const sync = { ready: false, revision: 0, generation: 0, pending: null, saving: null, error: '', conflict: false };
+let legacyState = null;
+let aiRuns = [];
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s = '') => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -101,18 +105,84 @@ function seed() {
   };
 }
 
-function load() {
-  try {
-    const s = JSON.parse(localStorage.getItem(KEY));
-    if (s?.v === 1) return s;
-  } catch { /* 저장소를 못 쓰면 시연 데이터로 시작 */ }
-  return seed();
+function initialState() {
+  const s = seed();
+  if (auth.user) {
+    s.profile.name = auth.user.name.slice(0, 20);
+    s.profile.bio = '';
+    s.profile.startDate = todayStr();
+    s.profile.public = false;
+    s.entries = [];
+    s.groups = [];
+  }
+  return s;
 }
-function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast('저장 공간이 부족해 저장하지 못했어요.'); }
+async function api(url, { method = 'GET', body } = {}) {
+  const res = await fetch(url, { method,
+    headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user?.id || '' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const data = await res.json().catch(() => ({ error: '서버 응답을 읽지 못했어요.' }));
+  if (!res.ok) throw Object.assign(new Error(data.error || '요청에 실패했어요.'), { status: res.status });
+  return data;
 }
 
-let S = load();
+function renderSync() {
+  const el = $('#save-status');
+  if (!el) return;
+  el.innerHTML = sync.error ? `<p class="error">${esc(sync.error)}</p><div class="inline">
+    <button class="btn small secondary" data-act="export-data">변경 내용 내보내기</button>
+    ${sync.conflict ? '<button class="btn small secondary" data-act="reload-data">서버 내용 다시 불러오기</button>' : '<button class="btn small secondary" data-act="retry-save">저장 재시도</button>'}</div>`
+    : auth.user ? (sync.saving || sync.pending ? '서버에 저장 중...' : sync.ready ? '서버에 저장됨' : '')
+    : '시연 화면입니다. 기록을 저장하려면 로그인해 주세요.';
+}
+
+function save() {
+  if (!auth.user) return Promise.resolve(true);
+  if (!sync.ready) return Promise.resolve(false);
+  sync.generation++;
+  sync.pending = JSON.parse(JSON.stringify({ v: S.v, profile: S.profile, entries: S.entries, categories: S.categories, lastNotified: S.lastNotified }));
+  return flushSave();
+}
+
+function flushSave() {
+  if (sync.saving) return sync.saving;
+  if (sync.conflict) return Promise.resolve(false);
+  sync.saving = (async () => {
+    while (sync.pending) {
+      const snapshot = sync.pending;
+      sync.pending = null;
+      try {
+        const result = await api('/api/state', { method: 'PUT', body: { revision: sync.revision, state: snapshot } });
+        sync.revision = result.revision;
+        sync.error = '';
+      } catch (e) {
+        sync.pending ||= snapshot;
+        sync.conflict = e.status === 409;
+        sync.error = e.status === 401 ? '로그인이 만료되어 저장하지 못했어요. 변경 내용을 내보낸 뒤 다시 로그인해 주세요.'
+          : e.message || '저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+        return false;
+      }
+    }
+    return true;
+  })().finally(() => { sync.saving = null; renderSync(); });
+  renderSync();
+  return sync.saving;
+}
+
+async function refreshData() {
+  if (sync.pending || sync.saving) { if (!await flushSave()) throw new Error('저장하지 못한 변경 내용을 먼저 확인해 주세요.'); }
+  const generation = sync.generation;
+  const data = await api('/api/state');
+  if (generation === sync.generation && data.revision >= sync.revision && !sync.pending && !sync.saving) {
+    S = data.state; sync.revision = data.revision;
+  } else {
+    S.groups = data.state.groups; S.pokes = data.state.pokes; S.notifications = data.state.notifications;
+  }
+  sync.ready = true;
+  renderSync();
+}
+
+let S = seed();
 const ui = {
   sort: 'time', cat: 'all', demo: false, newGroup: false,
   rec: null,
@@ -132,9 +202,10 @@ function toast(msg) {
 }
 
 async function ai(task, input) {
+  if (!auth.user) throw new Error('AI 기능을 사용하려면 Google로 로그인해 주세요.');
   let res;
   try {
-    res = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task, input }) });
+    res = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id }, body: JSON.stringify({ task, input }) });
   } catch {
     throw new Error('서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.');
   }
@@ -142,6 +213,7 @@ async function ai(task, input) {
   if (!res.ok || body.error) throw new Error(body.error || '요청에 실패했어요.');
   if (body.demo && !ui.demo) { ui.demo = true; renderTop(); }
   if (body.note) toast(body.note);
+  try { aiRuns = (await api('/api/ai/history')).runs; } catch { /* AI 결과는 전달하고 활동 목록은 다음 로드에서 다시 읽는다. */ }
   return body.data;
 }
 
@@ -160,8 +232,11 @@ const periodName = (d) => PERIOD_NAMES[d] || `${d}일마다`;
 function memberStatus(m) {
   if (m.me) { const s = myStats(); return { done: s.doneNow, streak: s.streak, left: s.left, days: S.profile.periodDays }; }
   const today = todayStr();
-  const cur = periodIndex(today, m.startDate, m.periodDays);
-  return { done: periodIndex(m.lastEntryDate, m.startDate, m.periodDays) === cur, streak: m.streak, left: daysLeft(today, m.startDate, m.periodDays), days: m.periodDays };
+  const days = m.periodDays || 7;
+  const left = m.startDate ? daysLeft(today, m.startDate, days) : null;
+  if (typeof m.doneNow === 'boolean') return { done: m.doneNow, streak: m.streak, left, days }; // 실제 멤버: 서버가 각자 기간으로 계산
+  const cur = periodIndex(today, m.startDate, days);
+  return { done: periodIndex(m.lastEntryDate, m.startDate, days) === cur, streak: m.streak, left, days };
 }
 const me = () => ({ id: 'me', me: true, name: S.profile.name, color: '#e11d48', photo: S.profile.photo, public: S.profile.public });
 const avatar = (m) => `<span class="avatar" style="background:${esc(m.color)}">${m.photo ? `<img src="${m.photo}" alt="">` : esc((m.name || '?').slice(0, 1))}</span>`;
@@ -337,7 +412,7 @@ function renderSheet() {
       <div class="field"><label for="d-title">제목</label><input id="d-title" maxlength="60" data-model="rec.draft.title" value="${esc(d.title)}"></div>
       <div class="field"><label for="d-summary">요약</label><textarea id="d-summary" rows="5" maxlength="600" data-model="rec.draft.summary">${esc(d.summary)}</textarea></div>
       ${d.tags.length ? `<div class="field"><span class="eyebrow">드러난 역량</span><ul class="tags">${d.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}${err}`;
-    foot = `<button class="btn secondary" data-act="rec-back">이전</button><button class="btn primary" data-act="rec-save">${icon('check')} 저장하기</button>`;
+    foot = `<button class="btn secondary" data-act="rec-back" ${r.loading ? 'disabled' : ''}>이전</button><button class="btn primary" data-act="rec-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 저장하기`}</button>`;
   }
   $('#sheet').innerHTML = `${head('경험 기록하기')}<div class="sheet-body">${body}</div><footer class="sheet-foot">${foot}</footer>`;
 }
@@ -549,6 +624,8 @@ function groupMembers(g) { return [me(), ...g.members]; }
 function groups() {
   return {
     html: `<p class="lead">친구들과 함께 기록하면 포기하지 않고 이어 갈 수 있어요.</p>
+    ${S.notifications?.length ? `<section class="card"><h2>받은 알림</h2>${S.notifications.map((n) => `<p>${esc(n.senderName)}님이 ${esc(n.groupName)} 그룹에서 기록을 기다리고 있어요.</p>`).join('')}
+      <button class="btn secondary" data-act="read-notifications">알림 읽음 처리</button></section>` : ''}
     ${S.groups.map((g) => {
       const ms = groupMembers(g);
       const done = ms.filter((m) => memberStatus(m).done).length;
@@ -559,7 +636,8 @@ function groups() {
     ${ui.newGroup
       ? `<form class="card" data-form="new-group"><div class="field"><label for="g-name">그룹 이름</label><input id="g-name" name="label" maxlength="20" required placeholder="예: 24학번 동기들" autocomplete="off"></div>
         <div class="inline"><button type="button" class="btn secondary" data-act="cancel-group">취소</button><button class="btn primary" style="flex:1">만들기</button></div></form>`
-      : `<button class="btn secondary block" data-act="new-group">${icon('plus')} 새 그룹 만들기</button>`}`,
+      : `<button class="btn secondary block" data-act="new-group">${icon('plus')} 새 그룹 만들기</button>`}
+    ${auth.user ? '<form class="card" data-form="join-group"><div class="field"><label for="invite-code">그룹 초대 코드</label><input id="invite-code" name="code" maxlength="20" required autocomplete="off"></div><button class="btn secondary">그룹 참여하기</button></form>' : ''}`,
   };
 }
 
@@ -573,7 +651,8 @@ function groupDetail(g) {
       <p><strong>${ms.length}명 중 ${done}명</strong>이 자기 기간의 기록을 마쳤어요.</p>
       <div class="bar" role="img" aria-label="${ms.length}명 중 ${done}명 완료"><span style="width:${(done / ms.length) * 100}%"></span></div>
       <p class="help">멤버마다 기록 주기와 시작일이 달라요. 자기 기간 안에 아직 기록하지 않은 멤버만 콕 찌를 수 있어요.</p>
-      <p class="help">시연 버전에서는 초대 코드가 실제로 전송되지 않아요.</p>
+      <p class="help">${auth.user ? '친구에게 초대 코드를 공유하면 같은 그룹에 참여할 수 있어요.' : '시연용 그룹입니다.'}</p>
+      ${auth.user ? `<button class="btn secondary" data-act="leave-group" data-v="${g.id}">그룹 나가기</button>` : ''}
     </section>
     <section class="card"><h2>멤버</h2><ul class="members">${ms.map((m) => {
       const st = memberStatus(m);
@@ -582,7 +661,7 @@ function groupDetail(g) {
         <a class="member-link" href="${m.me ? '#/profile' : `#/groups/${g.id}/m/${m.id}`}">
           ${fireRing(m, st.streak)}
           <span class="m-info"><strong>${esc(m.name)}${m.me ? ' (나)' : ''}${m.public ? '' : ` ${icon('lock', 14)}`}</strong>
-          <small>${periodName(st.days)} 기록 · <span class="${st.done ? 'done-txt' : 'late'}">${st.done ? '완료' : `미작성 · ${st.left === 0 ? '오늘 마감' : `마감 D-${st.left}`}`}</span></small></span>
+          <small>${periodName(st.days)} 기록 · <span class="${st.done ? 'done-txt' : 'late'}">${st.done ? '완료' : `미작성${st.left == null ? '' : st.left === 0 ? ' · 오늘 마감' : ` · 마감 D-${st.left}`}`}</span></small></span>
         </a>
         ${st.done ? '' : '<span class="alert-dot" role="img" aria-label="미작성">!</span>'}
         ${!st.done && !m.me ? `<button class="btn small ${poked ? 'secondary' : 'primary'}" data-act="poke" data-g="${g.id}" data-v="${m.id}" ${poked ? 'disabled' : ''}>${poked ? '찔렀어요' : '콕 찌르기'}</button>` : ''}
@@ -607,13 +686,29 @@ function memberView(g, m) {
 }
 
 // ───────── 4번 탭: 개인 프로필 ─────────
+function accountCard() {
+  return `<section class="card account-card" aria-labelledby="account-title">
+    <h2 id="account-title">Google 계정</h2>
+    ${auth.user ? `<p><strong>${esc(auth.user.name)}</strong></p><p class="account-email">${esc(auth.user.email)}</p>
+      <p class="help">기록과 설정을 서버에 저장해요. 같은 계정으로 로그인하면 다른 기기에서도 불러올 수 있어요.</p>
+      ${legacyState ? `<button class="btn secondary block" data-act="import-legacy">이 브라우저의 이전 기록 ${legacyState.entries?.length || 0}개 가져오기</button>` : ''}
+      <button class="btn secondary block" data-act="export-data">내 데이터 내보내기</button>
+      <button class="btn secondary block" data-act="logout" ${auth.busy ? 'disabled' : ''}>${auth.busy ? '로그아웃 중...' : '로그아웃'}</button>`
+      : `<p class="help">Google 계정으로 로그인하면 기록과 설정을 서버에 저장해요.</p>
+      ${auth.enabled ? '<a class="btn secondary block google-login" href="/auth/google">Google로 로그인</a>'
+        : '<p class="help">Google 로그인을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.</p>'}`}
+    <p class="error" role="alert">${esc(auth.error)}</p>
+    ${auth.user && aiRuns.length ? `<details><summary>저장된 AI 활동 ${aiRuns.length}개</summary>${aiRuns.map((run) => `<details><summary>${esc(run.task)} (${esc(new Date(run.createdAt).toLocaleDateString('ko-KR'))})</summary><pre class="ai-history">${esc(JSON.stringify(run.result.data, null, 2))}</pre></details>`).join('')}</details>` : ''}
+  </section>`;
+}
+
 function profile() {
   const p = S.profile;
   const s = myStats();
   const lvl = fireLevel(s.streak);
   return {
     title: '개인 프로필', back: 'history',
-    html: `<section class="profile-top">
+    html: `${accountCard()}<section class="profile-top">
       ${fireRing(me(), s.streak)}
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
       <input type="file" id="pf-photo" accept="image/*" class="sr-only" data-pf="photo">
@@ -649,7 +744,7 @@ function profile() {
         <div class="seg full" role="group" aria-labelledby="theme-l">${[['system', '시스템 설정'], ['light', '라이트'], ['dark', '다크']].map(([v, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${(p.theme || 'system') === v}">${l}</button>`).join('')}</div></div>
       <div class="field"><label for="pf-scale">글자 크기 <output id="scale-out">${p.fontScale}%</output></label><input type="range" id="pf-scale" min="90" max="130" step="10" data-pf="fontScale" value="${p.fontScale}"></div>
     </section>
-    <button class="btn secondary block" data-act="reset">시연 데이터로 초기화</button>`,
+    <button class="btn secondary block" data-act="reset">${auth.user ? '기록과 설정 초기화' : '시연 데이터로 초기화'}</button>`,
   };
 }
 
@@ -691,6 +786,7 @@ function ask(message, okLabel = '확인', danger = false) {
 }
 
 async function closeSheet() {
+  if (ui.rec?.loading) { toast('처리 중이에요. 완료될 때까지 기다려 주세요.'); return; }
   if (ui.rec?.raw.trim() && !(await ask('작성 중인 내용이 사라져요. 닫을까요?', '닫기'))) return;
   ui.rec = null;
   $('#sheet').close();
@@ -764,15 +860,18 @@ function renderTop() {
     ? `<button class="icon-btn" data-act="go-back" aria-label="뒤로">${icon('back', 24)}</button>`
     : `<a class="icon-btn" href="${v.back}" aria-label="뒤로">${icon('back', 24)}</a>`;
   // 메인 화면에서는 오른쪽 위 프로필 사진으로 개인 프로필에 들어간다
-  const profileBtn = `<a class="top-avatar" href="#/profile" aria-label="개인 프로필">${fireRing(me(), myStats().streak, 'sm')}</a>`;
+  const profileBtn = auth.user ? `<a class="top-avatar" href="#/profile" aria-label="개인 프로필">${fireRing(me(), myStats().streak, 'sm')}</a>`
+    : '<a class="btn small secondary" href="#/profile">로그인</a>';
   $('#topbar').innerHTML = v.back
     ? `${backBtn}<h1>${esc(v.title)}</h1>${badge}`
     : `<h1 class="logo">AIM<b>ers</b></h1>${badge}${profileBtn}`;
 }
 function render(scroll = false) {
+  if (auth.loading || (auth.user && !sync.ready)) return;
   current = view();
   renderTop();
   $('#main').innerHTML = current.html;
+  document.querySelectorAll('[data-pf]').forEach((el) => { el.disabled = !auth.user; });
   const tab = route()[0] || 'dashboard';
   document.querySelectorAll('.tabbar a').forEach((a) => (a.dataset.tab === tab ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
   document.title = current.title ? `${current.title} · AIMers` : 'AIMers';
@@ -784,6 +883,36 @@ function render(scroll = false) {
 
 // ───────── 이벤트 ─────────
 const actions = {
+  'retry-save': async () => { await flushSave(); },
+  'reload-data': async () => {
+    if ((sync.pending || sync.saving) && !(await ask('저장하지 못한 변경 내용이 사라져요. 먼저 내보내기로 보관했나요?', '다시 불러오기', true))) return;
+    location.reload();
+  },
+  'export-data': () => {
+    const blob = new Blob([JSON.stringify({ user: auth.user, state: S, aiRuns }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = `aimers-${todayStr()}.json`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+  'import-legacy': async () => {
+    if (!legacyState || !(await ask('이전 기록과 설정으로 현재 기록과 설정을 교체할까요? 그룹과 공개 설정은 현재 상태를 유지해요.', '가져오기'))) return;
+    S = { ...S, profile: { ...legacyState.profile, public: S.profile.public }, entries: legacyState.entries, categories: legacyState.categories, lastNotified: legacyState.lastNotified || '' };
+    if (await save()) { legacyState = null; applyPrefs(); render(); toast('이전 기록을 서버에 저장했어요.'); }
+    else render();
+  },
+  logout: async () => {
+    if (auth.busy) return;
+    auth.busy = true; auth.error = ''; render();
+    try {
+      if (!await flushSave()) throw new Error('변경 내용을 먼저 저장해 주세요.');
+      const res = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id } });
+      if (!res.ok) throw new Error('로그아웃하지 못했어요. 다시 시도해 주세요.');
+      location.assign('/?auth=logout#/profile');
+    } catch (e) {
+      auth.error = e.message || '로그아웃하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+      auth.busy = false; render();
+    }
+  },
   record: () => openRecord(),
   'pick-day': (el) => openRecord(el.dataset.v),
   'cal-rec': () => openCalendar({ value: ui.rec.date, max: todayStr(), title: '기록 날짜', onPick: (d) => { ui.rec.date = d; renderSheet(); } }),
@@ -839,15 +968,21 @@ const actions = {
     r.loading = false; renderSheet();
   },
   'rec-summarize': summarize,
-  'rec-save': () => {
+  'rec-save': async () => {
     const r = ui.rec;
+    if (r.loading) return;
     if (!r.draft.title.trim() || !r.draft.summary.trim()) { r.error = '제목과 요약을 입력해 주세요.'; renderSheet(); return; }
     const before = myStats().streak;
+    r.savedId ||= uid();
+    S.entries = S.entries.filter((e) => e.id !== r.savedId);
     S.entries.unshift({
-      id: uid(), date: r.date, category: r.category, title: r.draft.title.trim(), summary: r.draft.summary.trim(),
+      id: r.savedId, date: r.date, category: r.category, title: r.draft.title.trim(), summary: r.draft.summary.trim(),
       raw: r.raw.trim(), qa: r.questions.map((q, i) => ({ q, a: (r.answers[i] || '').trim() })), tags: r.draft.tags,
     });
-    save();
+    r.loading = true; renderSheet();
+    const saved = await save();
+    r.loading = false;
+    if (!saved) { r.error = '서버에 저장하지 못했어요. 변경 내용은 이 화면에 남아 있어요. 저장 상태를 확인해 주세요.'; renderSheet(); return; }
     ui.rec = null;
     $('#sheet').close();
     const after = myStats().streak;
@@ -899,19 +1034,35 @@ const actions = {
   copy: async (el) => {
     try { await navigator.clipboard.writeText(el.dataset.v); toast('초대 코드를 복사했어요.'); } catch { toast(`초대 코드: ${el.dataset.v}`); }
   },
-  poke: (el) => {
+  poke: async (el) => {
     const g = S.groups.find((x) => x.id === el.dataset.g);
     const m = g?.members.find((x) => x.id === el.dataset.v);
     if (!m) return;
+    if (auth.user) {
+      try {
+        await api(`/api/groups/${g.id}/pokes`, { method: 'POST', body: { recipientId: m.id } });
+        await refreshData(); render(); toast(`${m.name}님에게 기록 알림을 보냈어요.`);
+      } catch (e) { toast(e.message); }
+      return;
+    }
     S.pokes[pokeKey(g, m)] = todayStr();
     save(); render();
-    toast(`${m.name}님을 콕 찔렀어요. 기록을 독촉하는 알림이 갔어요.`);
+    toast('시연 화면에서 콕 찌르기를 표시했어요.');
+  },
+  'read-notifications': async () => {
+    try { await api('/api/notifications/read', { method: 'POST' }); await refreshData(); render(); } catch (e) { toast(e.message); }
+  },
+  'leave-group': async (el) => {
+    if (!(await ask('이 그룹에서 나갈까요? 다시 참여하려면 초대 코드가 필요해요.', '나가기', true))) return;
+    try { await api(`/api/groups/${el.dataset.v}`, { method: 'DELETE' }); await refreshData(); location.hash = '#/groups'; render(); } catch (e) { toast(e.message); }
   },
   reset: async () => {
-    if (!(await ask('모든 기록과 설정을 지우고 시연 데이터로 되돌릴까요?', '초기화', true))) return;
-    S = seed(); save(); applyPrefs(); ui.insight.data = null; ui.match.results = null;
+    if (!(await ask('이 계정의 기록과 설정을 초기화할까요?', '초기화', true))) return;
+    const groups = S.groups;
+    S = initialState(); if (auth.user) S.groups = groups;
+    const saved = await save(); applyPrefs(); ui.insight.data = null; ui.match.results = null;
     ui.interview = { theme: '', questions: [], active: -1, answer: '', feedback: null, loading: '' };
-    location.hash = '#/dashboard'; render(true); toast('시연 데이터로 초기화했어요.');
+    location.hash = '#/dashboard'; render(true); if (saved) toast('기록과 설정을 초기화했어요.');
   },
 };
 
@@ -922,13 +1073,27 @@ const forms = {
     if (!S.categories.includes(name)) { S.categories.push(name); save(); }
     if (ui.rec && $('#sheet').open) { ui.rec.category = name; renderSheet(); } else { render(); toast(`'${name}' 카테고리를 추가했어요.`); }
   },
-  'new-group': (f) => {
+  'new-group': async (f) => {
     const name = f.elements.label.value.trim();
     if (!name) return;
+    if (auth.user) {
+      try {
+        const g = await api('/api/groups', { method: 'POST', body: { name } });
+        await refreshData(); ui.newGroup = false; location.hash = `#/groups/${g.id}`; render();
+        toast('그룹을 만들었어요. 초대 코드를 공유해 주세요.');
+      } catch (e) { toast(e.message); }
+      return;
+    }
     const g = { id: uid(), name, code: Math.random().toString(36).slice(2, 8).toUpperCase(), members: [] };
     S.groups.push(g); ui.newGroup = false; save();
     location.hash = `#/groups/${g.id}`;
     toast('그룹을 만들었어요. 초대 코드를 친구에게 보내 보세요.');
+  },
+  'join-group': async (f) => {
+    try {
+      const g = await api('/api/groups/join', { method: 'POST', body: { code: f.elements.code.value.trim() } });
+      await refreshData(); location.hash = `#/groups/${g.id}`; render(); toast('그룹에 참여했어요.');
+    } catch (e) { toast(e.message); }
   },
 };
 
@@ -965,12 +1130,17 @@ async function setPref(el) {
 
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]');
+  const writes = ['record', 'pick-day', 'cal-start', 'theme', 'del-cat', 'del-entry', 'rec-save', 'new-group', 'poke', 'reset'];
+  if (el && writes.includes(el.dataset.act) && !auth.user) {
+    toast('기록을 저장하거나 그룹에 참여하려면 Google로 로그인해 주세요.'); location.hash = '#/profile'; return;
+  }
   if (el && actions[el.dataset.act]) actions[el.dataset.act](el);
 });
 document.addEventListener('submit', (ev) => {
   const f = ev.target.dataset?.form;
   if (!f) return;
   ev.preventDefault();
+  if (!auth.user) { toast('Google로 로그인한 뒤 사용할 수 있어요.'); location.hash = '#/profile'; return; }
   forms[f]?.(ev.target);
 });
 document.addEventListener('input', (ev) => {
@@ -983,7 +1153,70 @@ $('#cal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget
 $('#sheet').addEventListener('cancel', (ev) => { ev.preventDefault(); closeSheet(); }); // Esc도 같은 확인을 거친다
 window.addEventListener('hashchange', () => render(true));
 
-applyPrefs();
-render();
-maybeNotify();
+async function initAuth() {
+  $('#main').innerHTML = '<p class="help" role="status">계정을 확인하고 있어요.</p>';
+  try {
+    const res = await fetch('/api/auth/session');
+    if (!res.ok) throw new Error('Session request failed');
+    const session = await res.json();
+    auth.enabled = session.enabled;
+    auth.user = session.user;
+  } catch {
+    auth.error = '로그인 상태를 확인하지 못했어요. 페이지를 새로고침해 주세요.';
+  }
+  const url = new URL(location.href);
+  const error = url.searchParams.get('auth_error');
+  if (error) {
+    auth.error = ({
+      cancelled: 'Google 로그인을 취소했어요. 다시 로그인할 수 있어요.',
+      invalid_state: '로그인 요청이 만료되었어요. 다시 로그인해 주세요.',
+      unavailable: 'Google 로그인을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.',
+      failed: 'Google 로그인에 실패했어요. 다시 시도해 주세요.',
+    })[error] || '로그인하지 못했어요. 다시 시도해 주세요.';
+  }
+  const success = url.searchParams.get('auth') === 'success';
+  url.searchParams.delete('auth'); url.searchParams.delete('auth_error');
+  history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  if (auth.user) {
+    try {
+      await refreshData();
+      aiRuns = (await api('/api/ai/history')).runs;
+      try {
+        const previous = JSON.parse(localStorage.getItem(`${KEY}:google:${auth.user.googleSub}`) || localStorage.getItem(KEY));
+        if (previous?.v === 1) legacyState = previous;
+      } catch { /* 기존 브라우저 저장소를 읽을 수 없어도 서버 데이터는 사용할 수 있다. */ }
+    } catch (e) {
+      auth.loading = false; sync.ready = false;
+      auth.error = e.message || '서버의 기록을 불러오지 못했어요.';
+      $('#main').innerHTML = `${accountCard()}<p class="error" role="alert">기록을 불러오지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.</p><button class="btn secondary" data-act="reload-data">다시 불러오기</button>`;
+      renderTop(); renderSync(); return;
+    }
+  } else S = seed();
+  auth.loading = false;
+  applyPrefs(); render(); maybeNotify();
+  if (success && auth.user) toast(`${auth.user.name}님, 로그인했어요.`);
+}
+
+window.addEventListener('focus', async () => {
+  if (auth.loading) return;
+  try {
+    const res = await fetch('/api/auth/session');
+    if (res.ok && (await res.json()).user?.id !== auth.user?.id) {
+      if (sync.pending || sync.saving) { sync.error = '로그인 계정이 변경됐어요. 변경 내용을 내보낸 뒤 새로고침해 주세요.'; renderSync(); }
+      else location.reload();
+    } else if (auth.user && sync.ready && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {
+      const generation = sync.generation;
+      const data = await api('/api/state');
+      if (generation === sync.generation && data.revision >= sync.revision && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {
+        S = data.state; sync.revision = data.revision; applyPrefs(); render();
+      }
+    }
+  } catch { /* 연결이 복구되면 다음 포커스에서 다시 확인한다. */ }
+});
+window.addEventListener('online', () => { if (sync.pending && !sync.conflict) flushSave(); });
+window.addEventListener('beforeunload', (ev) => {
+  if (sync.pending || sync.saving) { ev.preventDefault(); ev.returnValue = ''; }
+});
+
+await initAuth();
 fetch('/api/status').then((r) => r.json()).then((s) => { if (s.demo) { ui.demo = true; renderTop(); } }).catch(() => {});

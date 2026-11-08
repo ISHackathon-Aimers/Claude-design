@@ -75,9 +75,9 @@ test('서버: 정적 파일, 경로 탈출 차단, API', async () => {
     assert.equal((await fetch(base)).status, 200);
     assert.equal((await fetch(`${base}/..%2fai.js`)).status, 403);
     const ok = await fetch(`${base}/api/ai`, { method: 'POST', body: JSON.stringify({ task: 'followup', input: { raw: '동아리 활동' } }) });
-    assert.equal(ok.status, 200);
+    assert.equal(ok.status, 401);
     const bad = await fetch(`${base}/api/ai`, { method: 'POST', body: '{oops' });
-    assert.equal(bad.status, 400);
+    assert.equal(bad.status, 401);
   } finally {
     srv.close();
   }

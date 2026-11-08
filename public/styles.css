@@ -158,6 +158,15 @@ h3 { font-size: 1.0625rem; font-weight: 700; }
 .btn.secondary:active { background: var(--border); }
 .btn.danger { background: var(--danger); color: #fff; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.account-card { display: grid; gap: 12px; }
+.account-card p { margin: 0; }
+.account-card .error:empty { display: none; }
+.account-email { overflow-wrap: anywhere; color: var(--text-2); }
+.google-login { text-decoration: none; }
+.save-status { padding: 8px 16px; font-size: 0.8125rem; color: var(--text-2); }
+.save-status:empty { display: none; }
+.save-status .inline { flex-wrap: wrap; margin-top: 8px; }
+.ai-history { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: 0.8125rem; }
 .icon-btn {
   width: 44px; height: 44px; display: inline-grid; place-items: center;
   border: 0; background: transparent; border-radius: 999px;
