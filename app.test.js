@@ -12,7 +12,7 @@ async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); }
   assert.fail('UI did not reach the expected state');
 }
-async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false } = {}) {
+async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false, plan = 'free', failMembership = false } = {}) {
   const html = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:3000/#/profile' });
   t.after(() => dom.window.close());
@@ -33,6 +33,7 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
   let pause;
   const writes = [];
   let reads = 0;
+  let canceled = false;
   const session = { enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } };
   t.mock.method(sessionManager, 'initialize', async () => { if (failAuth) throw Object.assign(new Error('로그인 복원 실패'), { status: failAuth === 'expired' ? 401 : 503 }); return session; });
   t.mock.method(sessionManager, 'current', async () => session);
@@ -43,6 +44,8 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     profile: { name: 'First Version', bio: '', photo: '', public: true, periodDays: 7, startDate: '2025-09-13', notify: false, font: 'pretendard', fontScale: 90 },
     categories: ['프로젝트'], entries: [{ id: 'old1', date: '2025-10-01', category: '동아리', title: '옛 기록', summary: '요약', raw: '원문', tags: ['협업'], qa: [] }], groups: [], pokes: {} }));
   globalThis.fetch = async (url, options = {}) => {
+    if (url === '/api/membership') return failMembership ? Response.json({ error: 'Unavailable' }, { status: 500 }) : Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false });
+    if (url === '/api/membership/cancel') { canceled = true; return Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false }); }
     if (url === '/api/auth/session') return Response.json({ enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } });
     if (url === '/api/ai/history') return Response.json({ runs: [] });
     if (url === '/api/status') return Response.json({ demo: true });
@@ -77,6 +80,50 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     pauseNextSave: () => { let release; pause = new Promise((resolve) => { release = resolve; }); return () => release(); },
   };
 }
+
+test('UI: free users see pricing on every AIMers+ route and retain profile editing', async (t) => {
+  await app(t);
+  assert.match(document.querySelector('.membership-card').textContent, /AIMers 무료/);
+  for (const path of ['services', 'services/interview', 'services/match', 'services/insight']) {
+    location.hash = `#/${path}`;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(document.querySelector('.premium-hero'));
+    assert.match(document.querySelector('#main').textContent, /2,990원/);
+    assert.match(document.querySelector('#main').textContent, /29,900원/);
+    assert.equal(document.querySelector('[data-act="iv-make"]'), null);
+    assert.equal(document.querySelector('[data-act="ins-run"]'), null);
+  }
+  document.querySelector('[data-act="plan-interest"]').click(); await tick();
+  assert.match(document.querySelector('#ask').textContent, /결제가 진행되거나 요금제가 변경되지 않아요/);
+  assert.ok(document.querySelector('.premium-hero'));
+  location.hash = '#/profile';
+  await until(() => document.querySelector('#pf-name'));
+  assert.equal(document.querySelector('#pf-name').disabled, false);
+});
+
+test('UI: premium members can schedule cancellation and keep their tools', async (t) => {
+  await app(t, { plan: 'annual' });
+  assert.match(document.querySelector('.membership-card').textContent, /AIMers\+ 연간/);
+  document.querySelector('[data-act="plan-cancel"]').click();
+  await until(() => document.querySelector('.membership-card').textContent.includes('해지 예약됨'));
+  assert.equal(document.querySelector('[data-act="plan-cancel"]'), null);
+  location.hash = '#/services';
+  await until(() => document.querySelector('.svc[href="#/services/interview"]'));
+  assert.equal(document.querySelector('.premium-hero'), null);
+  location.hash = '#/services/interview';
+  await until(() => document.querySelector('#topbar h1').textContent === '면접 예상 질문');
+  assert.equal(document.querySelector('.premium-hero'), null);
+});
+
+test('UI: unavailable membership fails closed without blocking the free diary', async (t) => {
+  await app(t, { failMembership: true });
+  assert.ok(document.querySelector('[data-act="plan-refresh"]'));
+  assert.ok(document.querySelector('#pf-name'));
+  location.hash = '#/services/insight';
+  await until(() => document.querySelector('.premium-hero'));
+  assert.equal(document.querySelector('[data-act="ins-run"]'), null);
+  assert.ok(document.querySelector('[data-act="plan-refresh"]'));
+});
 
 test('UI: an invalidated session offers explicit sign-in instead of an endless reconnect loop', async (t) => {
   const a = await app(t, { failAuth: 'expired' });

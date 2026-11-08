@@ -58,6 +58,8 @@ export class SupabaseStore {
     await this.rpc('app_ai_history', { p_run: { task, input, result } });
   }
   aiHistory(userId) { this.own(userId); return this.rpc('app_ai_history', { p_run: null }); }
+  membership(userId) { this.own(userId); return this.rpc('app_membership', {}); }
+  cancelMembership(userId) { this.own(userId); return this.rpc('app_cancel_membership', {}); }
   pushSubscription(userId, action, subscription) {
     this.own(userId);
     return this.rpc('app_push_subscription', { p_action: action, p_subscription: subscription });

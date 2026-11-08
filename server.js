@@ -7,6 +7,7 @@ import { runTask, isDemo } from './ai.js';
 import { handleAuth, publicConfig } from './auth.js';
 import { getStore } from './supabase-db.js';
 import { pushService, validateSubscription } from './push.js';
+import { PREMIUM_TASKS, hasPremium } from './public/plans.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const MAX_BODY = 3_500_000;
@@ -77,6 +78,14 @@ return async function handle(req, res) {
       if (req.headers['x-aimers-user'] !== user.id) return send(res, 401, { error: '로그인 계정이 변경되었습니다. 페이지를 다시 열어 주세요.' });
       if (!['GET', 'HEAD'].includes(req.method) && !await auth.isTrustedWrite(req)) return send(res, 403, { error: '요청 출처를 확인할 수 없습니다.' });
       const db = requestStore = store(req, user);
+      if (url.pathname === '/api/membership') {
+        if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+        return send(res, 200, await db.membership(user.id));
+      }
+      if (url.pathname === '/api/membership/cancel') {
+        if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+        return send(res, 200, await db.cancelMembership(user.id));
+      }
       if (url.pathname === '/api/push/subscription') {
         if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
         const body = await readJson(req);
@@ -121,6 +130,9 @@ return async function handle(req, res) {
       const body = await readJson(req).catch((e) => e);
       if (body instanceof Error) return send(res, body.status, { error: body.message });
       if (Buffer.byteLength(JSON.stringify(body)) > 200_000) return send(res, 413, { error: 'AI 요청이 너무 큽니다.' });
+      if (PREMIUM_TASKS.has(body.task) && !hasPremium(await requestStore.membership(requestUser.id))) {
+        return send(res, 403, { code: 'PREMIUM_REQUIRED', error: 'AIMers+는 프리미엄 요금제에서 이용할 수 있어요.' });
+      }
       const result = await aiTask(body?.task, body?.input);
       if (!result.error) await requestStore.saveAiRun(requestUser.id, body.task, body.input, result);
       return send(res, result.error ? 400 : 200, result);

@@ -648,3 +648,32 @@ button.more { border: 0; background: none; padding: 0; cursor: pointer; }
 }
 .menu [role="menuitem"]:hover, .menu [role="menuitem"]:focus-visible { background: var(--surface-2); outline: none; }
 .menu .danger { color: var(--danger); }
+
+/* Premium membership follows the existing theme and compact app layout. */
+.premium-hero { background: linear-gradient(145deg, var(--primary-soft), var(--surface)); padding: 28px 24px; }
+.premium-mark { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; border-radius: 18px; background: var(--surface); color: var(--primary); margin-bottom: 20px; }
+.premium-hero .eyebrow { color: var(--primary); }
+.premium-hero h2 { font-size: 1.75rem; line-height: 1.35; letter-spacing: -.04em; margin: 10px 0 14px; }
+.premium-hero p { color: var(--text-2); line-height: 1.7; font-size: .9375rem; }
+.premium-benefit { display: flex; gap: 14px; align-items: center; padding: 18px 0; }
+.premium-benefit + .premium-benefit { border-top: 1px solid var(--border); }
+.premium-benefit h3 { font-size: 1rem; margin: 0 0 4px; }
+.premium-benefit p { margin: 0; }
+.premium-benefit .nav-ic { flex-shrink: 0; }
+.plan-options { display: grid; gap: 12px; margin-top: 16px; }
+.plan-option { position: relative; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.plan-option.recommended { border: 2px solid var(--primary); padding: 19px; }
+.plan-price { font-size: 1.875rem; font-weight: 800; letter-spacing: -.04em; margin: 12px 0 4px; }
+.plan-price small { font-size: .875rem; color: var(--text-2); font-weight: 500; letter-spacing: 0; }
+.plan-saving { display: block; color: var(--primary); font-size: .8125rem; font-weight: 700; margin-top: 8px; }
+.plan-option .btn { margin-top: 16px; min-height: 48px; }
+.billing-notice { line-height: 1.6; margin: 12px 0 24px; }
+.membership-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.membership-heading h2 { margin: 0; }
+.plan-badge { font-size: .75rem; font-weight: 800; letter-spacing: .06em; color: var(--primary); background: var(--primary-soft); border-radius: 8px; padding: 5px 9px; }
+.membership-name { font-size: 1.375rem; font-weight: 750; margin: 20px 0 12px; }
+.membership-details { margin: 0 0 16px; }
+.membership-details > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: .875rem; }
+.membership-details dt { color: var(--text-2); flex-shrink: 0; }
+.membership-details dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.membership-card .btn { min-height: 44px; }

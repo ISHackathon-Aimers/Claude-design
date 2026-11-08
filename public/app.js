@@ -2,11 +2,13 @@ import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, f
 import { sessionManager } from './session.js';
 import { pwa } from './pwa.js';
 import { createSaveFeedback, loadingMarkup } from './feedback.js';
+import { PLANS, PREMIUM_TASKS, hasPremium } from './plans.js';
 pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
 const auth = { loading: true, enabled: false, user: null, error: '', busy: false, restoreError: false };
+const membership = { data: null, loading: false, error: '', busy: false, generation: 0 };
 const sync = { ready: false, revision: 0, generation: 0, pending: null, saving: null, error: '', conflict: false };
 let legacyState = null;
 let aiRuns = [];
@@ -133,6 +135,52 @@ async function api(url, { method = 'GET', body } = {}) {
   return data;
 }
 
+async function refreshMembership() {
+  if (membership.busy) return;
+  const generation = ++membership.generation;
+  membership.loading = true; membership.error = '';
+  try { const data = await api('/api/membership'); if (generation === membership.generation) membership.data = data; }
+  catch { if (generation === membership.generation) { membership.data = null; membership.error = '요금제 정보를 불러오지 못했어요. 잠시 후 다시 확인해 주세요.'; } }
+  finally { if (generation === membership.generation) membership.loading = false; }
+}
+
+const premium = () => Boolean(auth.user && hasPremium(membership.data));
+const planDate = (value) => new Date(value).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Seoul' });
+
+function planOptions() {
+  return `<div class="plan-options" aria-label="프리미엄 요금 안내">${Object.entries(PLANS).map(([key, plan]) => `<article class="plan-option${key === 'annual' ? ' recommended' : ''}">
+    <span class="eyebrow">${plan.name} 요금제</span>${key === 'annual' ? '<span class="plan-saving">연 5,980원 절약</span>' : ''}
+    <p class="plan-price">${plan.label}<small> / ${plan.period}</small></p>
+    <p class="help">${key === 'annual' ? '연간 요금 29,900원' : '월간 요금 2,990원'}</p>
+    <button class="btn ${key === 'annual' ? 'primary' : 'secondary'} block" data-act="plan-interest" data-v="${key}" ${membership.busy ? 'disabled' : ''}>${plan.name} 이용 안내</button>
+  </article>`).join('')}</div><p class="help billing-notice">현재 결제 연결을 준비 중이에요. 아직 결제하거나 자동 갱신하지 않아요.</p>`;
+}
+
+function membershipCard() {
+  if (!auth.user) return `<section class="card"><h2>나의 요금제</h2><p>무료 요금제</p><p class="help">기록과 그룹은 무료로 이용하고, AIMers+는 프리미엄으로 만나 보세요.</p><a class="btn secondary block" href="#/services">프리미엄 알아보기</a></section>`;
+  if (membership.loading) return `<section class="card" role="status" aria-busy="true"><h2>나의 요금제</h2><p>${spinner} 요금제를 확인하고 있어요</p></section>`;
+  if (membership.error) return `<section class="card"><h2>나의 요금제</h2><p class="error" role="alert">${esc(membership.error)}</p><button class="btn secondary" data-act="plan-refresh">다시 확인하기</button></section>`;
+  const active = premium(); const data = membership.data;
+  return `<section class="card membership-card" aria-labelledby="plan-title"><div class="membership-heading"><h2 id="plan-title">나의 요금제</h2><span class="plan-badge">${active ? 'PREMIUM' : 'FREE'}</span></div>
+    <p class="membership-name">${active ? `AIMers+ ${PLANS[data.plan].name}` : 'AIMers 무료'}</p>
+    ${active ? `<dl class="membership-details"><div><dt>요금 안내</dt><dd>${PLANS[data.plan].label} / ${PLANS[data.plan].period}</dd></div><div><dt>이용 가능 기간</dt><dd>${esc(planDate(data.currentPeriodEnd))}까지</dd></div><div><dt>이용 상태</dt><dd>${data.cancelAtPeriodEnd ? '해지 예약됨' : '프리미엄 이용 중'}</dd></div></dl>
+      <p class="help">${data.cancelAtPeriodEnd ? '남은 기간에는 AIMers+를 계속 이용할 수 있어요. 기간이 끝나면 무료 요금제로 전환돼요.' : '관리자가 부여한 이용권이에요. 실제 결제나 자동 갱신은 없어요.'}</p>
+      <a class="btn secondary block" href="#/services">AIMers+ 이용하기</a>
+      ${!data.cancelAtPeriodEnd ? `<button class="btn secondary block" data-act="plan-cancel" aria-busy="${membership.busy}" ${membership.busy ? 'disabled' : ''}>${membership.busy ? `${spinner} 해지를 예약하고 있어요` : '요금제 해지하기'}</button>` : ''}`
+      : '<p class="help">경험 기록, AI 기록 정리, 그룹은 계속 무료로 이용할 수 있어요.</p><a class="btn primary block" href="#/services">프리미엄 알아보기</a>'}
+    <button class="btn secondary block" data-act="plan-refresh" ${membership.busy ? 'disabled' : ''}>요금제 새로 확인하기</button></section>`;
+}
+
+function premiumWelcome() {
+  return { title: 'AIMers+', html: `<section class="card premium-hero"><span class="premium-mark">${icon('sparkle', 28)}</span><span class="eyebrow">AIMers+ PREMIUM</span><h2>남겨 둔 경험을,<br>다음 기회로.</h2><p>차곡차곡 쌓은 기록에서 나만의 강점을 찾고,<br>취업 준비의 다음 단계를 시작해 보세요.</p></section>
+    <section class="card premium-benefits" aria-labelledby="premium-benefits-title"><h2 id="premium-benefits-title">프리미엄으로 할 수 있는 일</h2>
+      ${[['chat', '나의 경험으로 면접 연습', '예상 질문부터 답변 피드백까지'], ['search', '자소서에 어울리는 경험 찾기', '문항에 맞는 기록과 근거 문장 추천'], ['trend', '기록 속 성장 발견하기', '역량 분석과 나만의 성장 보고서']].map(([ic, title, description]) => `<div class="premium-benefit"><span class="nav-ic">${icon(ic, 22)}</span><div><h3>${title}</h3><p class="help">${description}</p></div></div>`).join('')}</section>
+    ${membership.loading ? '<p role="status">요금제를 확인하고 있어요.</p>' : membership.error ? `${membershipCard()}` : ''}
+    <section aria-labelledby="pricing-title"><h2 id="pricing-title">나에게 맞는 이용 방식</h2>${planOptions()}</section>
+    ${!auth.user ? `<section class="card"><p class="help">Google로 로그인해 내 기록과 요금제를 관리해 보세요.</p>${auth.enabled ? '<button class="btn primary block" data-act="login">Google로 로그인</button>' : '<a class="btn secondary block" href="#/profile">로그인 설정 확인하기</a>'}</section>` : '<a class="btn secondary block" href="#/profile">현재 요금제 확인하기</a>'}
+    <p class="help">기록과 그룹 기능은 무료 요금제에서도 계속 이용할 수 있어요.</p>` };
+}
+
 function renderSync() {
   if (sync.saving) saveFeedback.update('saving');
   else if (sync.error) saveFeedback.update(sync.conflict ? 'conflict' : 'error', sync.error);
@@ -207,6 +255,7 @@ function toast(msg) {
 
 async function ai(task, input) {
   if (!auth.user) throw new Error('AI 기능을 사용하려면 Google로 로그인해 주세요.');
+  if (PREMIUM_TASKS.has(task) && !premium()) { render(); throw new Error('AIMers+는 프리미엄 요금제에서 이용할 수 있어요.'); }
   let res;
   try {
     res = await sessionManager.request('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id }, body: JSON.stringify({ task, input }) });
@@ -214,6 +263,9 @@ async function ai(task, input) {
     throw new Error('서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.');
   }
   const body = await res.json().catch(() => ({ error: '서버 응답을 읽지 못했어요.' }));
+  if (body.code === 'PREMIUM_REQUIRED') {
+    membership.data = null; await refreshMembership(); render();
+  }
   if (!res.ok || body.error) throw new Error(body.error || '요청에 실패했어요.');
   if (body.demo && !ui.demo) { ui.demo = true; renderTop(); }
   if (body.note) toast(body.note);
@@ -786,7 +838,7 @@ function profile() {
   const lvl = fireLevel(s.streak);
   return {
     title: '개인 프로필', back: 'history',
-    html: `${accountCard()}${pwaCard()}<section class="profile-top">
+    html: `${accountCard()}${membershipCard()}${pwaCard()}<section class="profile-top">
       ${fireRing(me(), s.streak)}
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
       <input type="file" id="pf-photo" accept="image/*" class="sr-only" data-pf="photo">
@@ -923,7 +975,7 @@ const route = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean
 
 function view() {
   const [tab = 'dashboard', a, b, c] = route();
-  if (tab === 'services') return { services, interview, match, insight }[a || 'services']?.() || services();
+  if (tab === 'services') return premium() ? ({ services, interview, match, insight }[a || 'services']?.() || services()) : premiumWelcome();
   if (tab === 'groups') {
     const g = S.groups.find((x) => x.id === a);
     if (!g) return groups();
@@ -979,6 +1031,23 @@ function render(scroll = false) {
 
 // ───────── 이벤트 ─────────
 const actions = {
+  'plan-refresh': async () => { if (membership.loading || membership.busy) return; const pending = refreshMembership(); render(); await pending; render(); },
+  'plan-interest': async (el) => {
+    const plan = PLANS[el.dataset.v]; if (!plan) return;
+    await ask(`${plan.name} 요금제는 ${plan.period === '월' ? '월' : '연'} ${plan.label}이에요. 현재 결제 연결을 준비 중이에요. 결제가 진행되거나 요금제가 변경되지 않아요.`, '확인');
+  },
+  'plan-cancel': async () => {
+    if (membership.busy || !premium()) return;
+    membership.busy = true; membership.generation++; membership.loading = false;
+    try {
+      const confirmed = await ask(`요금제 해지를 예약할까요? ${planDate(membership.data.currentPeriodEnd)}까지 이용할 수 있고 이후 무료 요금제로 전환돼요.`, '해지 예약', true);
+      if (!confirmed) return;
+      render();
+      membership.data = await api('/api/membership/cancel', { method: 'POST', body: {} }); membership.error = '';
+      toast(membership.data.cancelAtPeriodEnd ? '해지를 예약했어요. 남은 기간은 계속 이용할 수 있어요.' : '현재 무료 요금제예요.');
+    } catch (error) { toast(error.message); }
+    finally { membership.busy = false; render(); }
+  },
   'retry-auth': () => location.reload(),
   'pwa-install': async () => { try { await pwa.install(); } catch { toast('브라우저의 설치 메뉴를 사용해 주세요.'); } },
   'push-enable': async () => {
@@ -1352,6 +1421,7 @@ async function initAuth() {
     try {
       $('#main').innerHTML = loadingMarkup('기록을 불러오고 있어요', '지난 경험과 설정을 가져오는 중이에요.');
       await refreshData();
+      await refreshMembership();
       aiRuns = (await api('/api/ai/history')).runs;
       try {
         const previous = JSON.parse(localStorage.getItem(`${KEY}:google:${auth.user.googleSub}`) || localStorage.getItem(KEY));
@@ -1371,7 +1441,7 @@ async function initAuth() {
 
 let resumingSession = false;
 async function resumeSession() {
-  if (auth.loading || auth.restoreError || resumingSession || document.visibilityState === 'hidden') return;
+  if (auth.loading || auth.restoreError || resumingSession || membership.busy || $('#ask').open || document.visibilityState === 'hidden') return;
   resumingSession = true;
   try {
     const session = await sessionManager.current();
@@ -1379,6 +1449,7 @@ async function resumeSession() {
       if (sync.pending || sync.saving) { sync.error = '로그인 계정이 변경됐어요. 변경 내용을 내보낸 뒤 새로고침해 주세요.'; renderSync(); }
       else location.reload();
     } else if (auth.user && sync.ready && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {
+      await refreshMembership();
       const generation = sync.generation;
       const data = await api('/api/state');
       if (generation === sync.generation && data.revision >= sync.revision && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {

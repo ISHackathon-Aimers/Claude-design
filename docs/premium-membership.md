@@ -1,0 +1,64 @@
+# AIMers+ 요금제 설정
+
+월간 2,990원, 연간 29,900원이다. 연간 요금은 월간 12회 대비 5,980원 저렴하다.
+
+## 적용
+
+Supabase SQL Editor에서 기존 001, 002, 003 마이그레이션 적용 후 `supabase/migrations/202611080004_premium_membership.sql`을 실행한다. 이 마이그레이션은 기존 기록이나 그룹을 삭제하지 않는다. 배포 전에 적용해야 한다. 누락되면 무료 기록 기능은 유지되지만 요금제 조회와 AIMers+ 사용은 실패한다.
+
+무료 사용자는 기록 작성, AI 기록 정리, 그룹을 이용한다. 프리미엄 사용자는 면접 질문과 평가, 자소서 경험 검색, 성장 인사이트를 추가로 이용한다. 서버는 각 프리미엄 AI 요청마다 DB의 이용 권한과 종료 시각을 검사한다. 프로필이나 브라우저 저장소를 수정해서 유료 권한을 얻을 수 없다. 이전에 생성한 자신의 AI 활동은 무료 전환 후에도 프로필에서 열람할 수 있다.
+
+## 현재 결제 범위
+
+결제 서비스는 아직 연결되어 있지 않다. 요금제 안내 버튼은 가격과 준비 상태만 알리며 결제나 권한 변경을 수행하지 않는다. 카드 등록, 자동 결제, 결제 이력, 환불 기능은 제공하지 않는다.
+
+관리자가 부여한 이용권은 종료 시각까지 유효하다. 프로필의 해지는 종료 시 해지 의사를 DB에 예약한다. 즉시 권한을 제거하지 않으며 기간 종료 후 무료로 전환한다. 현재 자동 결제는 없으므로 외부 결제 계약을 취소하는 기능이 아니다.
+
+실제 유료 판매 전에는 결제 서비스의 결제 성공 검증과 웹훅, 갱신, 결제 실패, 환불, 해지 처리를 구현해야 한다. 브라우저의 성공 화면만으로 권한을 부여하면 안 된다. 결제 연동 시 해지 API는 결제 서비스에서 다음 결제 중단을 확인한 뒤 DB 상태를 변경해야 한다. 해지 예약 값만 바꾸는 현재 RPC를 외부 결제 해지 용도로 사용하면 안 된다.
+
+## 시연용 권한 부여
+
+Supabase Authentication의 Users에서 대상 계정 UUID를 확인한다. 관리 권한이 있는 SQL Editor에서 아래 UUID를 실제 대상 계정으로 바꾸고 실행한다. 사용자에게 서비스 키를 전달하지 않는다. 이미 이용권이 있는 계정에 실행하면 기간을 새로 설정한다.
+
+```sql
+insert into public.app_subscriptions (user_id, plan, current_period_start, current_period_end, cancel_at_period_end)
+values ('대상-사용자-UUID'::uuid, 'monthly', now(), now() + interval '1 month', false)
+on conflict (user_id) do update set
+  plan = excluded.plan,
+  current_period_start = excluded.current_period_start,
+  current_period_end = excluded.current_period_end,
+  cancel_at_period_end = false,
+  updated_at = now();
+```
+
+연간 시연은 `monthly`를 `annual`로, `interval '1 month'`를 `interval '1 year'`로 바꾼다. 앱의 프로필에서 요금제 새로 확인하기를 누르면 반영된다. 일반 로그인 사용자에게는 테이블 읽기와 쓰기를 허용하지 않으며, 자신의 요금제 조회와 해지 예약 RPC만 허용한다.
+
+## 이메일로 특정 사용자에게 부여
+
+아래 SQL은 가입한 계정이 있는지 검사하고 해당 계정에만 월간 이용권을 부여한다. 실제 대상 이메일로 교체하고 Supabase SQL Editor에서 실행한다. 이메일이 없으면 오류로 중단된다. 이 쿼리를 다시 실행하면 이용 기간이 실행 시점부터 다시 설정된다.
+
+```sql
+do $$
+declare target_id uuid;
+begin
+  select id into strict target_id from auth.users
+    where lower(email) = lower('대상자@example.com');
+  insert into public.app_subscriptions
+    (user_id, plan, current_period_start, current_period_end, cancel_at_period_end)
+  values (target_id, 'monthly', now(), now() + interval '1 month', false)
+  on conflict (user_id) do update set
+    plan = excluded.plan,
+    current_period_start = excluded.current_period_start,
+    current_period_end = excluded.current_period_end,
+    cancel_at_period_end = false,
+    updated_at = now();
+end;
+$$;
+```
+
+연간 이용권은 위와 같이 `annual`과 `interval '1 year'`로 바꾼다. 무료로 되돌릴 때는 아래 SQL의 이메일을 교체해 실행한다. 기존 기록과 AI 활동은 삭제하지 않으며, 진행 중인 AI 요청이 끝난 뒤 다음 요청부터 프리미엄 사용이 차단된다.
+
+```sql
+delete from public.app_subscriptions
+where user_id = (select id from auth.users where lower(email) = lower('대상자@example.com'));
+```

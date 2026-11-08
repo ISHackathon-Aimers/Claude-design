@@ -140,7 +140,7 @@ test('API: authenticated ownership, CSRF, validation, concurrent writes, group p
     getUser: (req) => db.getSession(req.headers.cookie?.split('=')[1]),
     isTrustedWrite: async (req) => req.headers.origin === origin && req.headers['x-requested-with'] === 'AIMers',
   });
-  const handler = createHandler({ auth, store: () => db, aiTask: async () => ({ data: { answer: 'Stored AI answer' } }) });
+  const handler = createHandler({ auth, store: () => Object.assign(db, { membership: async () => ({ premium: true, plan: 'monthly', currentPeriodEnd: new Date(Date.now() + 86400000).toISOString() }) }), aiTask: async () => ({ data: { answer: 'Stored AI answer' } }) });
   const server = http.createServer(handler);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
