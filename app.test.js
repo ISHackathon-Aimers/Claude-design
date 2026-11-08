@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { defaultProfile, validateState } from './db.js';
 import { sessionManager } from './public/session.js';
+import { pwa } from './public/pwa.js';
 
 let moduleId = 0;
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -76,6 +77,24 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false } = 
     pauseNextSave: () => { let release; pause = new Promise((resolve) => { release = resolve; }); return () => release(); },
   };
 }
+
+test('UI: device notification controls enable reminders and preserve a visible error on failure', async (t) => {
+  const a = await app(t);
+  Object.assign(pwa.state, { ready: true, available: true, subscribed: false, busy: false, error: '' });
+  t.mock.method(pwa, 'enable', async () => { pwa.state.subscribed = true; });
+  t.mock.method(pwa, 'disable', async () => { pwa.state.subscribed = false; });
+  t.mock.method(pwa, 'setPokes', async () => { throw new Error('알림 설정 저장 실패'); });
+  window.dispatchEvent(new a.dom.window.HashChangeEvent('hashchange'));
+  document.querySelector('[data-act="push-enable"]').click();
+  await until(() => a.state.profile.notify && document.querySelector('[data-act="push-disable"]'));
+  assert.equal(document.querySelector('#pf-notify').disabled, false);
+  document.querySelector('#push-pokes').dispatchEvent(new a.dom.window.Event('change', { bubbles: true }));
+  await until(() => document.querySelector('#pwa-title').parentElement.textContent.includes('알림 설정 저장 실패'));
+  document.querySelector('[data-act="push-disable"]').click();
+  await until(() => document.querySelector('[data-act="push-enable"]'));
+  assert.equal(document.querySelector('#pf-notify').disabled, true);
+  Object.assign(pwa.state, { ready: true, available: false, subscribed: false, busy: false, error: '' });
+});
 
 test('UI: loads the DB profile and queues overlapping edits with current revisions', async (t) => {
   const a = await app(t);

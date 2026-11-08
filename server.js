@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { runTask, isDemo } from './ai.js';
 import { handleAuth, publicConfig } from './auth.js';
 import { getStore } from './supabase-db.js';
+import { pushService, validateSubscription } from './push.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const MAX_BODY = 3_500_000;
@@ -14,6 +15,7 @@ const TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.png': 'image/png',
   '.webmanifest': 'application/manifest+json',
 };
 
@@ -48,10 +50,19 @@ async function readJson(req) {
   }
 }
 
-export function createHandler({ auth = handleAuth, store = getStore, aiTask = runTask } = {}) {
+export function createHandler({ auth = handleAuth, store = getStore, aiTask = runTask, push = pushService } = {}) {
 return async function handle(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/api/push/config') {
+      if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+      return send(res, 200, push.config());
+    }
+    if (url.pathname === '/api/push/cron') {
+      if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+      if (!push.authorized(req)) return send(res, 401, { error: '인증되지 않은 예약 작업입니다.' });
+      return send(res, 200, await push.runCron());
+    }
     if (url.pathname === '/api/config') {
       if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
       return send(res, 200, publicConfig());
@@ -66,6 +77,13 @@ return async function handle(req, res) {
       if (req.headers['x-aimers-user'] !== user.id) return send(res, 401, { error: '로그인 계정이 변경되었습니다. 페이지를 다시 열어 주세요.' });
       if (!['GET', 'HEAD'].includes(req.method) && !await auth.isTrustedWrite(req)) return send(res, 403, { error: '요청 출처를 확인할 수 없습니다.' });
       const db = requestStore = store(req, user);
+      if (url.pathname === '/api/push/subscription') {
+        if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+        const body = await readJson(req);
+        const subscription = validateSubscription(body.action, body.subscription);
+        if (body.action === 'save' && !push.config().enabled) return send(res, 503, { error: '알림 서버 설정이 아직 완료되지 않았어요.' });
+        return send(res, 200, await db.pushSubscription(user.id, body.action, subscription));
+      }
       if (url.pathname === '/api/state') {
         if (req.method === 'GET') return send(res, 200, await db.state(user.id));
         if (req.method !== 'PUT') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
@@ -86,7 +104,12 @@ return async function handle(req, res) {
         if (!group[2] && req.method === 'DELETE') return send(res, 200, await db.leaveGroup(user.id, group[1]));
         if (group[2] && req.method === 'POST') {
           const body = await readJson(req);
-          return send(res, 200, await db.poke(user.id, group[1], body.recipientId));
+          const result = await db.poke(user.id, group[1], body.recipientId);
+          // The DB trigger has already persisted the delivery jobs, so a push outage must not lose the poke.
+          if (push.config().enabled) {
+            try { await push.drain(user.id); } catch { console.error('Push delivery deferred to the next scheduled run.'); }
+          }
+          return send(res, 200, result);
         }
         return send(res, 405, { error: '허용되지 않는 요청입니다.' });
       }

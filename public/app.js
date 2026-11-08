@@ -1,5 +1,7 @@
 import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday, matchEntry } from './logic.js';
 import { sessionManager } from './session.js';
+import { pwa } from './pwa.js';
+pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
@@ -764,13 +766,28 @@ function accountCard() {
   </section>`;
 }
 
+function pwaCard() {
+  const status = pwa.state;
+  const installHelp = pwa.isIOS() && !pwa.installed()
+    ? '<p class="help">아이폰과 아이패드는 Safari의 공유 메뉴에서 홈 화면에 추가한 뒤, 추가된 AIMers 앱을 열어 알림을 켜 주세요. iOS 16.4 이상이 필요해요.</p>'
+    : !pwa.installed() ? '<p class="help">브라우저의 앱 설치 또는 홈 화면에 추가 메뉴로 AIMers를 설치할 수 있어요.</p>' : '<p class="help">AIMers 앱으로 실행 중이에요.</p>';
+  return `<section class="card" aria-labelledby="pwa-title"><h2 id="pwa-title">앱 설치와 알림</h2>${installHelp}
+    ${status.installable ? '<button class="btn secondary" data-act="pwa-install">AIMers 앱 설치</button>' : ''}
+    <p class="help">앱을 닫아도 기록 마감과 그룹 친구의 콕 찌르기 알림을 받을 수 있어요. 알림은 기기마다 켜야 해요.</p>
+    ${auth.user ? `<p role="status">${!status.ready ? '알림 설정 확인 중...' : status.subscribed ? '이 기기에서 알림을 받고 있어요.' : !status.available ? '홈 화면 설치 여부와 브라우저 지원, 알림 서버 설정을 확인해 주세요.' : '이 기기의 알림이 꺼져 있어요.'}</p>
+      <button class="btn ${status.subscribed ? 'secondary' : 'primary'}" data-act="${status.subscribed ? 'push-disable' : 'push-enable'}" ${status.busy || !status.ready || !status.available ? 'disabled' : ''} aria-busy="${status.busy}">${status.busy ? '설정 중...' : status.subscribed ? '이 기기 알림 끄기' : '이 기기에서 알림 받기'}</button>
+      <label class="switch-row" for="push-pokes"><span>콕 찌르기 알림<small>그룹 친구가 내 기록을 기다릴 때 알려 드려요.</small></span><input type="checkbox" role="switch" id="push-pokes" data-push="pokes" ${status.pokes ? 'checked' : ''} ${!status.subscribed || status.busy ? 'disabled' : ''}></label>`
+      : '<p class="help">로그인한 뒤 알림을 설정할 수 있어요.</p>'}
+    ${status.error ? `<p class="error" role="alert">${esc(status.error)}</p>` : ''}</section>`;
+}
+
 function profile() {
   const p = S.profile;
   const s = myStats();
   const lvl = fireLevel(s.streak);
   return {
     title: '개인 프로필', back: 'history',
-    html: `${accountCard()}<section class="profile-top">
+    html: `${accountCard()}${pwaCard()}<section class="profile-top">
       ${fireRing(me(), s.streak)}
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
       <input type="file" id="pf-photo" accept="image/*" class="sr-only" data-pf="photo">
@@ -793,7 +810,7 @@ function profile() {
         <p class="help">${periodName(p.periodDays)} 한 번씩 기록해요. 이번 기간: ${fmtMD(s.ps)} ~ ${fmtMD(s.pe)}</p></div>
       <div class="field"><span class="label" id="pf-start-l">시작 날짜</span>
         <button type="button" class="date-btn" data-act="cal-start" aria-labelledby="pf-start-l pf-start-v">${icon('calendar')}<span id="pf-start-v">${fmtW(p.startDate)}</span></button></div>
-      <label class="switch-row" for="pf-notify"><span>마감 알림<small>기간이 끝나기 2일 전부터 앱을 열면 알려 드려요</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''}></label>
+      <label class="switch-row" for="pf-notify"><span>기록 마감 알림<small>미작성 상태라면 마감 2일 전부터 하루 한 번 알려 드려요. 한국 시간 오전 9시대에 발송해요.</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''} ${pwa.state.subscribed ? '' : 'disabled'}></label>
     </section>
     <section class="card"><h2>카테고리</h2>
       <p class="help">카테고리를 삭제해도 기록은 지워지지 않고 다른 카테고리로 옮겨져요.</p>
@@ -902,17 +919,6 @@ function renderCal() {
       <button class="btn small secondary" data-act="cal-pick" data-v="${today}" ${cal.max && today > cal.max ? 'disabled' : ''}>오늘</button></div>`;
 }
 
-function maybeNotify() {
-  const s = myStats();
-  const today = todayStr();
-  if (!S.profile.notify || s.doneNow || s.current < 0 || s.left > 2 || S.lastNotified === today) return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  // shortcut: 앱을 열었을 때만 알림. 앱을 닫아도 오는 알림은 서비스 워커 + 푸시 서버가 필요.
-  new Notification('AIMers', { body: `기록 마감까지 ${s.left === 0 ? '오늘 하루' : `${s.left}일`} 남았어요. 이번 기간 경험을 남겨 주세요.`, icon: 'icon.svg' });
-  S.lastNotified = today;
-  save();
-}
-
 // ───────── 라우팅 & 렌더링 ─────────
 const route = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
 
@@ -961,7 +967,7 @@ function render(scroll = false) {
   const chips = $('#main .chips');
   const picked = chips && $('[aria-pressed="true"]', chips);
   if (picked) centerIn(chips, picked); // 고른 카테고리가 보이게
-  document.querySelectorAll('[data-pf]').forEach((el) => { el.disabled = !auth.user; });
+  document.querySelectorAll('[data-pf]').forEach((el) => { el.disabled = !auth.user || (el.dataset.pf === 'notify' && !pwa.state.subscribed); });
   const tab = route()[0] || 'dashboard';
   document.querySelectorAll('.tabbar a').forEach((a) => (a.dataset.tab === tab ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
   document.title = current.title ? `${current.title} · AIMers` : 'AIMers';
@@ -973,6 +979,25 @@ function render(scroll = false) {
 
 // ───────── 이벤트 ─────────
 const actions = {
+  'pwa-install': async () => { try { await pwa.install(); } catch { toast('브라우저의 설치 메뉴를 사용해 주세요.'); } },
+  'push-enable': async () => {
+    if (!auth.user || pwa.state.busy) return;
+    pwa.state.busy = true; pwa.state.error = ''; render();
+    try {
+      await pwa.enable();
+      S.profile.notify = true;
+      if (!await save()) throw new Error('기기 알림은 켰지만 기록 알림 설정을 저장하지 못했어요. 저장을 재시도해 주세요.');
+      toast('이 기기의 알림을 켰어요.');
+    } catch (error) { pwa.state.error = error.message; }
+    finally { pwa.state.busy = false; render(); }
+  },
+  'push-disable': async () => {
+    if (pwa.state.busy) return;
+    pwa.state.busy = true; pwa.state.error = ''; render();
+    try { await pwa.disable(); toast('이 기기의 알림을 껐어요.'); }
+    catch (error) { pwa.state.error = error.message; }
+    finally { pwa.state.busy = false; render(); }
+  },
   login: async () => {
     if (auth.busy) return;
     auth.busy = true; auth.error = ''; render();
@@ -1003,6 +1028,7 @@ const actions = {
     auth.busy = true; auth.error = ''; render();
     try {
       if (!await flushSave()) throw new Error('변경 내용을 먼저 저장해 주세요.');
+      await pwa.disable();
       await sessionManager.signOut();
       location.assign('/?auth=logout#/profile');
     } catch (e) {
@@ -1242,11 +1268,6 @@ async function setPref(el) {
     try { p.photo = await resizePhoto(file); } catch (e) { toast(e.message); return; }
   } else if (key === 'public' || key === 'notify') {
     p[key] = el.checked;
-    if (key === 'notify' && el.checked) {
-      if (!('Notification' in window)) { toast('이 브라우저는 알림을 지원하지 않아요.'); p.notify = false; }
-      else if ((await Notification.requestPermission()) !== 'granted') { toast('브라우저 알림이 꺼져 있어요. 설정에서 허용해 주세요.'); p.notify = false; }
-      else toast('마감 2일 전부터 알려 드릴게요.');
-    }
   } else if (key === 'periodDays' || key === 'fontScale') {
     p[key] = Number(el.value);
   } else {
@@ -1281,7 +1302,15 @@ document.addEventListener('input', (ev) => {
   if (t.dataset.model) setModel(t.dataset.model, t.value);
   if (t.dataset.search !== undefined) { ui.q = t.value; updateRecords(); }
 });
-document.addEventListener('change', (ev) => { if (ev.target.dataset.pf) setPref(ev.target); });
+document.addEventListener('change', async (ev) => {
+  if (ev.target.dataset.pf) setPref(ev.target);
+  if (ev.target.dataset.push === 'pokes' && !pwa.state.busy) {
+    pwa.state.busy = true; pwa.state.error = '';
+    try { await pwa.setPokes(ev.target.checked); }
+    catch (error) { pwa.state.error = error.message; }
+    finally { pwa.state.busy = false; render(); }
+  }
+});
 $('#cal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); }); // 바깥을 누르면 닫기
 $('#sheet').addEventListener('cancel', (ev) => { ev.preventDefault(); closeSheet(); }); // Esc도 같은 확인을 거친다
 window.addEventListener('hashchange', () => render(true));
@@ -1324,7 +1353,7 @@ async function initAuth() {
     }
   } else S = seed();
   auth.loading = false;
-  applyPrefs(); render(); maybeNotify();
+  applyPrefs(); render();
   if (success && auth.user) toast(`${auth.user.name}님, 로그인했어요.`);
 }
 
@@ -1350,4 +1379,5 @@ window.addEventListener('beforeunload', (ev) => {
 });
 
 await initAuth();
+await pwa.start(api, auth.user, () => { if (route()[0] === 'profile') render(); });
 fetch('/api/status').then((r) => r.json()).then((s) => { if (s.demo) { ui.demo = true; renderTop(); } }).catch(() => {});

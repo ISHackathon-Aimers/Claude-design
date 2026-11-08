@@ -7,12 +7,15 @@
     "prestart": "npm run build",
     "start": "node --env-file-if-exists=.env server.js",
     "pretest": "npm run build",
+    "push:keys": "node scripts/push-keys.mjs",
     "test": "node --test"
   },
   "dependencies": {
+    "web-push": "^3.6.7",
     "@supabase/supabase-js": "^2.0.0"
   },
   "devDependencies": {
+    "sharp": "^0.35.5",
     "jsdom": "^31.0.0",
     "@electric-sql/pglite": "^0.3.0",
     "esbuild": "^0.25.0"

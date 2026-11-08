@@ -22,6 +22,8 @@ export class SupabaseStore {
         NOT_MEMBER: [403, '그룹에 접근할 수 없습니다.'], NOT_FOUND: [404, '초대 코드를 확인해 주세요.'],
         GROUP_LIMIT: [400, '참여 가능한 그룹 또는 멤버 수를 초과했습니다.'],
         POKE_UNAVAILABLE: [400, '현재 기록을 독촉할 수 없는 멤버입니다.'], INVALID_INPUT: [400, '입력 내용을 확인해 주세요.'],
+        DEVICE_LIMIT: [400, '알림은 계정당 최대 10개 기기에서 사용할 수 있어요.'],
+        SUBSCRIPTION_IN_USE: [409, '이 기기의 기존 알림을 해제한 뒤 다시 시도해 주세요.'],
       };
       const code = Object.keys(known).find((key) => error.message?.includes(key));
       if (code) fail(known[code][1], known[code][0]);
@@ -56,6 +58,10 @@ export class SupabaseStore {
     await this.rpc('app_ai_history', { p_run: { task, input, result } });
   }
   aiHistory(userId) { this.own(userId); return this.rpc('app_ai_history', { p_run: null }); }
+  pushSubscription(userId, action, subscription) {
+    this.own(userId);
+    return this.rpc('app_push_subscription', { p_action: action, p_subscription: subscription });
+  }
 }
 
 export const getStore = (req, user) => new SupabaseStore(userClient(req), user);
