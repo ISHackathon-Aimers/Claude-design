@@ -235,25 +235,19 @@ test('UI: premium passes show expiration without renewal or cancellation languag
   assert.equal(document.querySelector('.premium-hero'), null);
 });
 
-test('UI: payment preview shows success, failure and cancel without charging or changing membership', async (t) => {
+test('UI: paused checkout shows coming soon without preview or payment requests', async (t) => {
   const a = await app(t, { initialRoute: 'services' });
-  await until(() => document.querySelector('[data-act="payment-preview"][data-v="annual"]'));
-  const opener = document.querySelector('[data-act="payment-preview"][data-v="annual"]');
-  opener.focus(); opener.click();
-  const dialog = document.querySelector('#payment-preview');
-  assert.equal(dialog.open, true);
-  assert.match(dialog.textContent, /시연 모드/);
-  assert.match(dialog.textContent, /29,900원/);
-  assert.equal(dialog.querySelector('input'), null);
-  for (const result of ['success', 'failure', 'cancel']) {
-    dialog.querySelector(`[data-preview="${result}"]`).click();
-    assert.match(dialog.textContent, /시연/);
-    assert.ok(dialog.contains(document.activeElement));
-    dialog.querySelector('[data-preview="checkout"]').click();
+  await until(() => document.querySelector('[data-act="plan-interest"]:not(:disabled)'));
+  assert.equal(document.querySelector('[data-act="payment-preview"]'), null);
+  assert.doesNotMatch(document.querySelector('#main').textContent, /미리보기|체험하기/);
+  const buttons = document.querySelectorAll('[data-act="plan-interest"]');
+  assert.equal(buttons.length, 2);
+  for (const button of buttons) {
+    assert.equal(button.textContent, '준비 중입니다');
+    button.click(); await tick();
+    assert.match(document.querySelector('#ask').textContent, /현재 결제 서비스를 준비 중입니다/);
   }
-  dialog.querySelector('[data-preview="close"]').click();
   assert.equal(document.querySelector('#payment-preview'), null);
-  assert.equal(document.activeElement, opener);
   assert.equal(a.paymentPrepares, 0); assert.equal(a.paymentConfirms, 0); assert.equal(a.sdkCalls, 0);
   assert.equal(a.writes.length, 0);
   assert.ok(document.querySelector('.premium-hero'));

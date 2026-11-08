@@ -5,7 +5,6 @@ import { createSaveFeedback, loadingMarkup } from './feedback.js';
 import { PLANS, PREMIUM_TASKS, hasPremium } from './plans.js';
 import { payments } from './payments.js';
 import { defaultAvatar } from './avatars.js';
-import { openPaymentPreview } from './payment-preview.js';
 pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
@@ -174,13 +173,12 @@ function planOptions() {
     <span class="eyebrow">${key === 'annual' ? '1년' : '1개월'} 이용권</span>${key === 'annual' ? '<span class="plan-saving">연 5,980원 절약</span>' : ''}
     <p class="plan-price">${plan.label}</p>
     <p class="help">${key === 'annual' ? '1년' : '1개월'} 이용 금액</p>
-    <button class="btn ${key === 'annual' ? 'primary' : 'secondary'} block" data-act="plan-interest" data-v="${key}" ${checkout.busy || membership.loading || membership.error || checkout.pendingId ? 'disabled' : ''}>${checkout.busy ? '결제 확인 중...' : `${key === 'annual' ? '1년' : '1개월'} 이용권 구매`}</button>
-    ${!membership.data?.checkoutEnabled ? `<button class="btn secondary block" data-act="payment-preview" data-v="${key}">결제 흐름 미리보기</button>` : ''}
-  </article>`).join('')}</div><p class="help billing-notice">선택한 이용 기간에 대한 금액을 한 번 결제해요.</p>${paymentNotice()}`;
+    <button class="btn ${key === 'annual' ? 'primary' : 'secondary'} block" data-act="plan-interest" data-v="${key}" ${checkout.busy || membership.loading || membership.error || checkout.pendingId ? 'disabled' : ''}>${checkout.busy ? '결제 확인 중...' : membership.data?.checkoutEnabled ? `${key === 'annual' ? '1년' : '1개월'} 이용권 구매` : '준비 중입니다'}</button>
+  </article>`).join('')}</div><p class="help billing-notice">${membership.data?.checkoutEnabled ? '선택한 이용 기간에 대한 금액을 한 번 결제해요.' : '현재 결제 서비스를 준비 중입니다.'}</p>${paymentNotice()}`;
 }
 
 function paymentNotice() {
-  return `${checkout.busy ? '<p class="help" role="status">결제 결과를 확인하고 있어요.</p>' : ''}${checkout.error ? `<p class="error" role="alert">${esc(checkout.error)}</p>` : ''}${checkout.pendingId && !checkout.busy ? '<button class="btn secondary block" data-act="payment-retry">결제 결과 다시 확인하기</button><button class="btn secondary block" data-act="payment-resume">같은 주문으로 결제 다시 진행하기</button>' : ''}`;
+  return `${checkout.busy ? '<p class="help" role="status">결제 결과를 확인하고 있어요.</p>' : ''}${checkout.error ? `<p class="error" role="alert">${esc(checkout.error)}</p>` : ''}${checkout.pendingId && !checkout.busy ? `<button class="btn secondary block" data-act="payment-retry">결제 결과 다시 확인하기</button>${membership.data?.checkoutEnabled ? '<button class="btn secondary block" data-act="payment-resume">같은 주문으로 결제 다시 진행하기</button>' : ''}` : ''}`;
 }
 
 const paymentStorageKey = () => `aimers-payment:${auth.user?.id}`;
@@ -208,8 +206,8 @@ async function retryPayment() {
 }
 async function buyPass(key) {
   if (checkout.busy || checkout.pendingId || !Object.hasOwn(PLANS, key)) return;
+  if (!membership.data?.checkoutEnabled) { await ask('현재 결제 서비스를 준비 중입니다.', '확인'); return; }
   if (!auth.user) { toast('로그인한 뒤 이용권을 구매해 주세요.'); location.hash = '#/profile'; return; }
-  if (!membership.data?.checkoutEnabled) { await ask('결제 서비스를 준비 중이에요. 잠시 후 다시 확인해 주세요.', '확인'); return; }
   checkout.busy = true; checkout.error = ''; render();
   try {
     const order = await api('/api/payments/prepare', { method: 'POST', body: { plan: key } });
@@ -1133,7 +1131,6 @@ const actions = {
   },
   'plan-refresh': async () => { if (membership.loading || membership.busy) return; const pending = refreshMembership(); render(); await pending; render(); },
   'plan-interest': (el) => buyPass(el.dataset.v),
-  'payment-preview': (el) => { if (!checkout.busy) openPaymentPreview(el.dataset.v); },
   'payment-retry': retryPayment,
   'payment-resume': async () => {
     if (checkout.busy || !auth.user || !checkout.pendingId) return;

@@ -8,13 +8,15 @@ const validId = (id) => typeof id === 'string' && /^aimers-[a-f0-9-]{36}$/.test(
 export function paymentConfig(env = process.env) {
   let origin;
   try { const url = new URL(env.PAYMENT_ORIGIN); if (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) origin = url.origin; } catch { /* Disabled until configured. */ }
-  const enabled = Boolean(env.PORTONE_STORE_ID && env.PORTONE_CHANNEL_KEY && env.PORTONE_API_SECRET && env.PORTONE_WEBHOOK_SECRET && env.SUPABASE_URL && (env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY) && origin);
-  return { enabled, ...(enabled ? { storeId: env.PORTONE_STORE_ID, channelKey: env.PORTONE_CHANNEL_KEY, origin } : {}) };
+  const configured = Boolean(env.PORTONE_STORE_ID && env.PORTONE_CHANNEL_KEY && env.PORTONE_API_SECRET && env.PORTONE_WEBHOOK_SECRET && env.SUPABASE_URL && (env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY) && origin);
+  const enabled = configured && env.PAYMENTS_ENABLED === '1';
+  return { enabled, configured, ...(configured ? { storeId: env.PORTONE_STORE_ID, channelKey: env.PORTONE_CHANNEL_KEY, origin } : {}) };
 }
 
 export function createPaymentService({ env = process.env, clientFactory = createClient, providerFactory = PaymentClient, verify = Webhook.verify } = {}) {
   const config = () => paymentConfig(env);
-  const ready = () => { if (!config().enabled) fail('결제 서비스를 준비 중이에요. 잠시 후 다시 확인해 주세요.', 503); };
+  const ready = () => { if (!config().configured) fail('현재 결제 서비스를 준비 중입니다.', 503); };
+  const acceptingPayments = () => { if (!config().enabled) fail('현재 결제 서비스를 준비 중입니다.', 503); };
   const rpc = async (name, args) => {
     ready();
     const client = clientFactory(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -51,14 +53,14 @@ export function createPaymentService({ env = process.env, clientFactory = create
   return {
     config,
     async prepare(user, plan) {
-      ready();
+      acceptingPayments();
       if (!Object.hasOwn(PLANS, plan)) fail('이용권을 선택해 주세요.');
       const { storeId, channelKey } = config();
       const order = await rpc('app_payment_create', { p_id: `aimers-${randomUUID()}`, p_user: user.id, p_plan: plan, p_store: storeId, p_channel: channelKey });
       return checkoutOptions(order, user);
     },
     async resume(user, id) {
-      ready(); if (!validId(id)) fail('결제 번호가 올바르지 않아요.');
+      acceptingPayments(); if (!validId(id)) fail('결제 번호가 올바르지 않아요.');
       const order = await rpc('app_payment_order', { p_id: id, p_user: user.id });
       if (!order) fail('결제 내역을 찾을 수 없어요.', 404);
       return checkoutOptions(order, user);
