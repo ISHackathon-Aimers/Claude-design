@@ -1,4 +1,12 @@
 node_modules/
 .env
+.env.*
+!.env.example
+client_secret*.json
+data/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
 .claude/
 .DS_Store

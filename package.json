@@ -2,8 +2,17 @@
   "name": "aimers",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "google-auth-library": "^11.3.3"
+  },
+  "devDependencies": {
+    "jsdom": "^31.0.0"
   }
 }
