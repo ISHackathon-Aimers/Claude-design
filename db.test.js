@@ -5,7 +5,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from './db.js';
-import { createAuth } from './auth.js';
 import { createHandler } from './server.js';
 import { todayStr } from './public/logic.js';
 
@@ -136,7 +135,11 @@ test('API: authenticated ownership, CSRF, validation, concurrent writes, group p
   db.setSession('token-a', a.id, Date.now() + 60000);
   db.setSession('token-b', b.id, Date.now() + 60000);
   let origin;
-  const auth = createAuth({ store: () => db, getConfig: async () => ({ origin }) });
+  // Inject verified identities to exercise main's API contract independently of OAuth.
+  const auth = Object.assign(async () => false, {
+    getUser: (req) => db.getSession(req.headers.cookie?.split('=')[1]),
+    isTrustedWrite: async (req) => req.headers.origin === origin && req.headers['x-requested-with'] === 'AIMers',
+  });
   const handler = createHandler({ auth, store: () => db, aiTask: async () => ({ data: { answer: 'Stored AI answer' } }) });
   const server = http.createServer(handler);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

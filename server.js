@@ -4,11 +4,11 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { runTask, isDemo } from './ai.js';
-import { handleAuth } from './auth.js';
-import { getStore } from './db.js';
+import { handleAuth, publicConfig } from './auth.js';
+import { getStore } from './supabase-db.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
-const MAX_BODY = 8_000_000;
+const MAX_BODY = 3_500_000;
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -23,6 +23,15 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
 }
 
 async function readJson(req) {
+  if (req.body !== undefined) {
+    const raw = typeof req.body === 'string' || Buffer.isBuffer(req.body) ? req.body.toString() : JSON.stringify(req.body);
+    if (Buffer.byteLength(raw) > MAX_BODY) throw Object.assign(new Error('요청이 너무 큽니다.'), { status: 413 });
+    try {
+      const value = JSON.parse(raw);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected object');
+      return value;
+    } catch { throw Object.assign(new Error('요청 형식이 올바르지 않습니다.'), { status: 400 }); }
+  }
   const chunks = [];
   let size = 0;
   for await (const c of req) {
@@ -43,40 +52,45 @@ export function createHandler({ auth = handleAuth, store = getStore, aiTask = ru
 return async function handle(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/api/config') {
+      if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+      return send(res, 200, publicConfig());
+    }
     if (await auth(req, res, url)) return;
     let requestUser;
+    let requestStore;
     if (url.pathname.startsWith('/api/') && url.pathname !== '/api/status') {
-      const user = auth.getUser(req);
+      const user = await auth.getUser(req);
       requestUser = user;
       if (!user) return send(res, 401, { error: '로그인해 주세요.' });
       if (req.headers['x-aimers-user'] !== user.id) return send(res, 401, { error: '로그인 계정이 변경되었습니다. 페이지를 다시 열어 주세요.' });
       if (!['GET', 'HEAD'].includes(req.method) && !await auth.isTrustedWrite(req)) return send(res, 403, { error: '요청 출처를 확인할 수 없습니다.' });
-      const db = store();
+      const db = requestStore = store(req, user);
       if (url.pathname === '/api/state') {
-        if (req.method === 'GET') return send(res, 200, db.state(user.id));
+        if (req.method === 'GET') return send(res, 200, await db.state(user.id));
         if (req.method !== 'PUT') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
         const body = await readJson(req);
-        return send(res, 200, db.saveState(user.id, body.state, body.revision));
+        return send(res, 200, await db.saveState(user.id, body.state, body.revision));
       }
-      if (url.pathname === '/api/ai/history' && req.method === 'GET') return send(res, 200, { runs: db.aiHistory(user.id) });
+      if (url.pathname === '/api/ai/history' && req.method === 'GET') return send(res, 200, { runs: await db.aiHistory(user.id) });
       if (url.pathname === '/api/groups' && req.method === 'POST') {
         const body = await readJson(req);
-        return send(res, 201, db.createGroup(user.id, body.name));
+        return send(res, 201, await db.createGroup(user.id, body.name));
       }
       if (url.pathname === '/api/groups/join' && req.method === 'POST') {
         const body = await readJson(req);
-        return send(res, 200, db.joinGroup(user.id, body.code));
+        return send(res, 200, await db.joinGroup(user.id, body.code));
       }
       const group = url.pathname.match(/^\/api\/groups\/([a-zA-Z0-9_-]+)(\/pokes)?$/);
       if (group) {
-        if (!group[2] && req.method === 'DELETE') return send(res, 200, db.leaveGroup(user.id, group[1]));
+        if (!group[2] && req.method === 'DELETE') return send(res, 200, await db.leaveGroup(user.id, group[1]));
         if (group[2] && req.method === 'POST') {
           const body = await readJson(req);
-          return send(res, 200, db.poke(user.id, group[1], body.recipientId));
+          return send(res, 200, await db.poke(user.id, group[1], body.recipientId));
         }
         return send(res, 405, { error: '허용되지 않는 요청입니다.' });
       }
-      if (url.pathname === '/api/notifications/read' && req.method === 'POST') return send(res, 200, db.readNotifications(user.id));
+      if (url.pathname === '/api/notifications/read' && req.method === 'POST') return send(res, 200, await db.readNotifications(user.id));
       if (url.pathname !== '/api/ai') return send(res, 404, { error: '요청한 기능을 찾을 수 없습니다.' });
     }
     if (url.pathname === '/api/ai') {
@@ -85,7 +99,7 @@ return async function handle(req, res) {
       if (body instanceof Error) return send(res, body.status, { error: body.message });
       if (Buffer.byteLength(JSON.stringify(body)) > 200_000) return send(res, 413, { error: 'AI 요청이 너무 큽니다.' });
       const result = await aiTask(body?.task, body?.input);
-      if (!result.error) store().saveAiRun(requestUser.id, body.task, body.input, result);
+      if (!result.error) await requestStore.saveAiRun(requestUser.id, body.task, body.input, result);
       return send(res, result.error ? 400 : 200, result);
     }
     if (url.pathname === '/api/status') return send(res, 200, { demo: isDemo() });

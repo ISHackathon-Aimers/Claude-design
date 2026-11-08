@@ -1,4 +1,5 @@
 import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday, matchEntry } from './logic.js';
+import { sessionManager } from './session.js';
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
@@ -31,6 +32,8 @@ const ICONS = {
   trend: '<path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+  dots: '<circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/>',
+  edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
   trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   sparkle: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
@@ -119,7 +122,7 @@ function initialState() {
 }
 async function api(url, { method = 'GET', body } = {}) {
   const res = await fetch(url, { method,
-    headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user?.id || '' },
+    headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user?.id || '', ...await sessionManager.headers() },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await res.json().catch(() => ({ error: '서버 응답을 읽지 못했어요.' }));
   if (!res.ok) throw Object.assign(new Error(data.error || '요청에 실패했어요.'), { status: res.status });
@@ -205,7 +208,7 @@ async function ai(task, input) {
   if (!auth.user) throw new Error('AI 기능을 사용하려면 Google로 로그인해 주세요.');
   let res;
   try {
-    res = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id }, body: JSON.stringify({ task, input }) });
+    res = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id, ...await sessionManager.headers() }, body: JSON.stringify({ task, input }) });
   } catch {
     throw new Error('서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.');
   }
@@ -255,7 +258,13 @@ const durationText = (periods, len) => {
 
 function entryCard(e, owner = true, open = false) {
   return `<article class="card entry">
-    <div class="entry-meta"><span class="tag-cat">#${esc(e.category)}</span><time datetime="${e.date}">${fmt(e.date)}</time></div>
+    <div class="entry-meta"><span class="tag-cat">#${esc(e.category)}</span>
+      <span class="meta-right"><time datetime="${e.date}">${fmt(e.date)}</time>${owner ? `<span class="entry-menu-wrap">
+        <button class="icon-btn kebab" data-act="entry-menu" aria-label="기록 메뉴" aria-haspopup="menu" aria-expanded="false">${icon('dots', 20)}</button>
+        <span class="menu" role="menu" hidden>
+          <button role="menuitem" data-act="edit-entry" data-v="${e.id}">${icon('edit', 18)} 수정</button>
+          <button role="menuitem" class="danger" data-act="del-entry" data-v="${e.id}">${icon('trash', 18)} 삭제</button>
+        </span></span>` : ''}</span></div>
     <h3>${esc(e.title)}</h3>
     <p>${esc(e.summary)}</p>
     ${e.tags?.length ? `<ul class="tags" aria-label="역량">${e.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
@@ -263,7 +272,6 @@ function entryCard(e, owner = true, open = false) {
       <p class="pre">${esc(e.raw)}</p>
       ${(e.qa || []).map((x) => `<p class="qa-q">Q. ${esc(x.q)}</p><p class="pre">${x.a ? esc(x.a) : '<span class="muted">(답변 없음)</span>'}</p>`).join('')}
     </div></details>` : ''}
-    ${owner ? `<button class="link danger" data-act="del-entry" data-v="${e.id}">기록 삭제</button>` : ''}
   </article>`;
 }
 
@@ -408,6 +416,28 @@ function openRecord(date = todayStr()) {
   renderSheet();
   $('#sheet').showModal();
 }
+// 카테고리(＋추가)와 날짜 입력: 새 기록 작성과 기록 수정에서 함께 쓴다
+function catDateFields(r) {
+  return `<fieldset><legend>카테고리</legend>
+        <div class="chips wrap">${S.categories.map((c) => `<button type="button" class="chip" data-act="rec-cat" data-v="${esc(c)}" aria-pressed="${r.category === c}">#${esc(c)}</button>`).join('')}
+          <button type="button" class="chip add-chip" data-act="rec-add-cat" aria-label="카테고리 추가" aria-expanded="${!!r.addingCat}">${icon('plus', 16)}</button></div>
+        ${r.addingCat ? `<form class="inline add-cat-form" data-form="add-cat"><label class="sr-only" for="new-cat">새 카테고리 이름</label><input id="new-cat" name="label" maxlength="15" placeholder="새 카테고리 (예: 인턴)" autocomplete="off">
+          <button class="btn small primary">추가</button><button type="button" class="btn small secondary" data-act="rec-add-cat">취소</button></form>` : ''}
+      </fieldset>
+      <div class="field"><span class="label" id="rec-date-l">날짜</span>
+        <button type="button" class="date-btn" data-act="cal-rec" aria-labelledby="rec-date-l rec-date-v">${icon('calendar')}<span id="rec-date-v">${fmtW(r.date)}</span></button></div>`;
+}
+
+const editSnapshot = (r) => JSON.stringify([r.category, r.date, r.draft.title, r.draft.summary, r.raw]);
+function openEdit(id) {
+  const e = S.entries.find((x) => x.id === id);
+  if (!e) return;
+  ui.rec = { step: 'edit', id, category: e.category, date: e.date, raw: e.raw || '', draft: { title: e.title, summary: e.summary }, loading: false, error: '' };
+  ui.rec.orig = editSnapshot(ui.rec);
+  renderSheet();
+  $('#sheet').showModal();
+}
+
 function renderSheet() {
   const r = ui.rec;
   if (!r) return;
@@ -416,16 +446,17 @@ function renderSheet() {
   const busy = (label) => (r.loading ? `${spinner} ${label}` : '');
   let body;
   let foot;
-  if (r.step === 'write') {
+  if (r.step === 'edit') {
+    body = `${catDateFields(r)}
+      <div class="field"><label for="e-title">제목</label><input id="e-title" maxlength="60" data-model="rec.draft.title" value="${esc(r.draft.title)}"></div>
+      <div class="field"><label for="e-summary">요약</label><textarea id="e-summary" rows="4" maxlength="600" data-model="rec.draft.summary">${esc(r.draft.summary)}</textarea></div>
+      <div class="field"><label for="e-raw">원문</label><textarea id="e-raw" rows="5" maxlength="4000" data-model="rec.raw">${esc(r.raw)}</textarea>
+        <p class="help">원문을 고쳐도 AI 요약은 다시 만들지 않아요. 요약도 함께 고쳐 주세요.</p></div>${err}`;
+    foot = `<button class="btn secondary" data-act="close-sheet" ${r.loading ? 'disabled' : ''}>취소</button>
+      <button class="btn primary" data-act="edit-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 수정 완료`}</button>`;
+  } else if (r.step === 'write') {
     body = `<p class="step">1 / 3 · 경험 쓰기</p>
-      <fieldset><legend>카테고리</legend>
-        <div class="chips wrap">${S.categories.map((c) => `<button type="button" class="chip" data-act="rec-cat" data-v="${esc(c)}" aria-pressed="${r.category === c}">#${esc(c)}</button>`).join('')}
-          <button type="button" class="chip add-chip" data-act="rec-add-cat" aria-label="카테고리 추가" aria-expanded="${!!r.addingCat}">${icon('plus', 16)}</button></div>
-        ${r.addingCat ? `<form class="inline add-cat-form" data-form="add-cat"><label class="sr-only" for="new-cat">새 카테고리 이름</label><input id="new-cat" name="label" maxlength="15" placeholder="새 카테고리 (예: 인턴)" autocomplete="off">
-          <button class="btn small primary">추가</button><button type="button" class="btn small secondary" data-act="rec-add-cat">취소</button></form>` : ''}
-      </fieldset>
-      <div class="field"><span class="label" id="rec-date-l">날짜</span>
-        <button type="button" class="date-btn" data-act="cal-rec" aria-labelledby="rec-date-l rec-date-v">${icon('calendar')}<span id="rec-date-v">${fmtW(r.date)}</span></button></div>
+${catDateFields(r)}
       <div class="field"><label for="rec-raw">이번 기간에 한 일</label>
         <textarea id="rec-raw" rows="6" maxlength="4000" data-model="rec.raw" placeholder="예: 팀 프로젝트에서 회원가입 화면을 만들었어요.">${esc(r.raw)}</textarea>
         <p class="help">짧게 써도 괜찮아요. 부족한 부분은 AI가 질문으로 채워 드려요.</p></div>${err}`;
@@ -445,7 +476,7 @@ function renderSheet() {
       ${d.tags.length ? `<div class="field"><span class="eyebrow">드러난 역량</span><ul class="tags">${d.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}${err}`;
     foot = `<button class="btn secondary" data-act="rec-back" ${r.loading ? 'disabled' : ''}>이전</button><button class="btn primary" data-act="rec-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 저장하기`}</button>`;
   }
-  $('#sheet').innerHTML = `${head('경험 기록하기')}<div class="sheet-body">${body}</div><footer class="sheet-foot">${foot}</footer>`;
+  $('#sheet').innerHTML = `${head(r.step === 'edit' ? '기록 수정하기' : '경험 기록하기')}<div class="sheet-body">${body}</div><footer class="sheet-foot">${foot}</footer>`;
 }
 
 async function summarize() {
@@ -726,7 +757,7 @@ function accountCard() {
       <button class="btn secondary block" data-act="export-data">내 데이터 내보내기</button>
       <button class="btn secondary block" data-act="logout" ${auth.busy ? 'disabled' : ''}>${auth.busy ? '로그아웃 중...' : '로그아웃'}</button>`
       : `<p class="help">Google 계정으로 로그인하면 기록과 설정을 서버에 저장해요.</p>
-      ${auth.enabled ? '<a class="btn secondary block google-login" href="/auth/google">Google로 로그인</a>'
+      ${auth.enabled ? `<button class="btn secondary block google-login" data-act="login" ${auth.busy ? 'disabled' : ''}>Google로 로그인</button>`
         : '<p class="help">Google 로그인을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.</p>'}`}
     <p class="error" role="alert">${esc(auth.error)}</p>
     ${auth.user && aiRuns.length ? `<details><summary>저장된 AI 활동 ${aiRuns.length}개</summary>${aiRuns.map((run) => `<details><summary>${esc(run.task)} (${esc(new Date(run.createdAt).toLocaleDateString('ko-KR'))})</summary><pre class="ai-history">${esc(JSON.stringify(run.result.data, null, 2))}</pre></details>`).join('')}</details>` : ''}
@@ -834,7 +865,8 @@ function ask(message, okLabel = '확인', danger = false) {
 
 async function closeSheet() {
   if (ui.rec?.loading) { toast('처리 중이에요. 완료될 때까지 기다려 주세요.'); return; }
-  if (ui.rec?.raw.trim() && !(await ask('작성 중인 내용이 사라져요. 닫을까요?', '닫기'))) return;
+  const dirty = ui.rec?.step === 'edit' ? editSnapshot(ui.rec) !== ui.rec.orig : ui.rec?.raw.trim();
+  if (dirty && !(await ask(ui.rec.step === 'edit' ? '수정한 내용이 사라져요. 닫을까요?' : '작성 중인 내용이 사라져요. 닫을까요?', '닫기'))) return;
   ui.rec = null;
   $('#sheet').close();
 }
@@ -941,6 +973,12 @@ function render(scroll = false) {
 
 // ───────── 이벤트 ─────────
 const actions = {
+  login: async () => {
+    if (auth.busy) return;
+    auth.busy = true; auth.error = ''; render();
+    try { await sessionManager.signIn(); }
+    catch { auth.error = 'Google 로그인에 연결하지 못했어요. 다시 시도해 주세요.'; auth.busy = false; render(); }
+  },
   'retry-save': async () => { await flushSave(); },
   'reload-data': async () => {
     if ((sync.pending || sync.saving) && !(await ask('저장하지 못한 변경 내용이 사라져요. 먼저 내보내기로 보관했나요?', '다시 불러오기', true))) return;
@@ -965,8 +1003,7 @@ const actions = {
     auth.busy = true; auth.error = ''; render();
     try {
       if (!await flushSave()) throw new Error('변경 내용을 먼저 저장해 주세요.');
-      const res = await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id } });
-      if (!res.ok) throw new Error('로그아웃하지 못했어요. 다시 시도해 주세요.');
+      await sessionManager.signOut();
       location.assign('/?auth=logout#/profile');
     } catch (e) {
       auth.error = e.message || '로그아웃하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
@@ -1006,10 +1043,37 @@ const actions = {
   'rec-clear': () => { ui.q = ''; ui.date = ''; render(); },
   cat: (el) => { ui.cat = el.dataset.v; render(); },
   'del-entry': async (el) => {
+    closeMenus();
     if (!(await ask('이 기록을 삭제할까요?\n되돌릴 수 없어요.', '삭제', true))) return;
     S.entries = S.entries.filter((e) => e.id !== el.dataset.v);
     save(); toast('기록을 삭제했어요.');
     if (route()[0] === 'entry') actions['go-back'](); else render();
+  },
+  'entry-menu': (el) => {
+    const menu = el.nextElementSibling;
+    const open = menu.hidden;
+    closeMenus();
+    menu.hidden = !open;
+    el.setAttribute('aria-expanded', String(open));
+    if (open) menu.querySelector('[role="menuitem"]').focus();
+  },
+  'edit-entry': (el) => { closeMenus(); openEdit(el.dataset.v); },
+  'edit-save': async () => {
+    const r = ui.rec;
+    if (r.loading) return;
+    if (!r.draft.title.trim() || !r.draft.summary.trim()) { r.error = '제목과 요약을 입력해 주세요.'; renderSheet(); return; }
+    const e = S.entries.find((x) => x.id === r.id);
+    if (!e) { r.error = '기록을 찾을 수 없어요. 삭제되었을 수 있어요.'; renderSheet(); return; }
+    Object.assign(e, { category: r.category, date: r.date, title: r.draft.title.trim(), summary: r.draft.summary.trim(), raw: r.raw.trim() });
+    r.loading = true; renderSheet();
+    const saved = await save();
+    r.loading = false;
+    if (!saved) { r.error = '서버에 저장하지 못했어요. 변경 내용은 이 화면에 남아 있어요. 저장 상태를 확인해 주세요.'; renderSheet(); return; }
+    ui.rec = null;
+    $('#sheet').close();
+    ui.insight.data = null;
+    toast('기록을 수정했어요.');
+    render();
   },
   'go-back': () => { if (history.length > 1) history.back(); else location.hash = '#/dashboard'; },
   'close-sheet': () => closeSheet(),
@@ -1192,9 +1256,14 @@ async function setPref(el) {
   if (key !== 'name' && key !== 'bio') render();
 }
 
+function closeMenus() {
+  document.querySelectorAll('.entry-menu-wrap .menu:not([hidden])').forEach((m) => { m.hidden = true; m.previousElementSibling.setAttribute('aria-expanded', 'false'); });
+}
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenus(); });
 document.addEventListener('click', (ev) => {
+  if (!ev.target.closest('.entry-menu-wrap')) closeMenus();
   const el = ev.target.closest('[data-act]');
-  const writes = ['record', 'day-record', 'period', 'cal-start', 'theme', 'del-cat', 'del-entry', 'rec-save', 'new-group', 'poke', 'reset'];
+  const writes = ['record', 'edit-entry', 'edit-save', 'day-record', 'period', 'cal-start', 'theme', 'del-cat', 'del-entry', 'rec-save', 'new-group', 'poke', 'reset'];
   if (el && writes.includes(el.dataset.act) && !auth.user) {
     toast('기록을 저장하거나 그룹에 참여하려면 Google로 로그인해 주세요.'); location.hash = '#/profile'; return;
   }
@@ -1220,9 +1289,7 @@ window.addEventListener('hashchange', () => render(true));
 async function initAuth() {
   $('#main').innerHTML = '<p class="help" role="status">계정을 확인하고 있어요.</p>';
   try {
-    const res = await fetch('/api/auth/session');
-    if (!res.ok) throw new Error('Session request failed');
-    const session = await res.json();
+    const session = await sessionManager.initialize();
     auth.enabled = session.enabled;
     auth.user = session.user;
   } catch {
@@ -1264,8 +1331,8 @@ async function initAuth() {
 window.addEventListener('focus', async () => {
   if (auth.loading) return;
   try {
-    const res = await fetch('/api/auth/session');
-    if (res.ok && (await res.json()).user?.id !== auth.user?.id) {
+    const session = await sessionManager.current();
+    if (session.user?.id !== auth.user?.id) {
       if (sync.pending || sync.saving) { sync.error = '로그인 계정이 변경됐어요. 변경 내용을 내보낸 뒤 새로고침해 주세요.'; renderSync(); }
       else location.reload();
     } else if (auth.user && sync.ready && !sync.pending && !sync.saving && !$('#sheet').open && !$('#cal').open) {

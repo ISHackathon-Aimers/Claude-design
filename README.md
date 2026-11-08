@@ -4,7 +4,7 @@
 
 ## 실행
 
-Node.js 24 이상이 필요합니다. Node.js의 기본 SQLite 모듈을 사용합니다.
+Node.js 24가 필요합니다. 배포 서버는 Supabase를 사용합니다.
 
 ```bash
 npm install
@@ -29,53 +29,61 @@ DEEPSEEK_API_KEY=발급받은_키
 npm test
 ```
 
-### Google 로그인
+### Vercel과 Supabase 서버 구성
 
-Google Cloud에서 웹 애플리케이션 유형의 OAuth 클라이언트를 사용합니다. 승인된 리디렉션 URI에 `http://localhost:3000/auth/google/callback`을 등록합니다. 동의 화면이 테스트 상태라면 로그인할 계정을 테스트 사용자에 추가합니다.
+화면과 기능은 원격 main을 기준으로 유지합니다. Vercel이 정적 파일과 서버 API를 실행하고, Supabase가 Google 로그인과 영구 DB 저장을 담당합니다. 프론트와 서버를 별도 저장소로 나누지 않습니다.
 
-다운로드한 `client_secret*.json` 파일을 프로젝트 루트에 두면 서버가 읽습니다. 이 파일과 `.env`는 Git에서 제외됩니다. 파일을 따로 전달받았다면 클라이언트 시크릿을 다시 입력할 필요가 없습니다. 여러 자격 증명 파일이 있다면 `.env`의 `GOOGLE_CLIENT_SECRET_FILE`로 파일 하나를 지정합니다. 프로젝트 밖의 절대 경로도 사용할 수 있습니다.
+Node.js 24를 사용합니다. `npm start`와 `npm test`는 실행 전에 Supabase 브라우저 SDK를 빌드합니다. Vercel의 Build Command는 `npm run build`, Output Directory는 `public`, Framework Preset은 Other입니다. `vercel.json`이 API 경로와 실행 시간을 설정합니다.
 
-JSON 파일 대신 아래 환경변수로 설정할 수도 있습니다. `.env.example`을 참고하세요.
+### Google 로그인 설정
 
-```dotenv
-APP_URL=http://localhost:3000
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
-```
+Supabase Authentication의 Google 제공자를 활성화하고 Google OAuth Web 클라이언트 ID와 시크릿을 등록합니다. Google Cloud의 승인된 리디렉션 URI에는 Supabase 제공자 화면의 콜백 URL을 등록합니다. 일반적인 주소는 `https://PROJECT_REF.supabase.co/auth/v1/callback`입니다.
 
-외부 주소나 ngrok을 사용할 때는 `APP_URL`을 해당 HTTPS 주소로 바꾸고, Google Cloud에도 같은 주소의 `/auth/google/callback`을 등록한 뒤 서버를 다시 시작합니다. 로그인은 설정한 `APP_URL`에서 시작해야 합니다. LAN의 HTTP 주소는 로그인에 사용하지 않습니다.
+Supabase Authentication의 URL Configuration에서 Site URL을 배포 주소로 설정하고 Redirect URLs에 실제 접속할 사이트의 루트 URL을 등록합니다. 로컬 개발에는 `http://localhost:3000/`을 추가합니다. 브라우저는 로그인을 시작한 사이트의 루트로 돌아옵니다.
 
-개인 프로필에서 Google 로그인과 로그아웃을 할 수 있습니다. 서버는 state, PKCE, nonce와 Google ID 토큰을 검증하고 HttpOnly 세션 쿠키를 발급합니다. Google API 액세스 토큰과 클라이언트 시크릿은 브라우저에 전달하지 않습니다.
+Google OAuth가 Internal이면 해당 Google 조직의 계정만 로그인할 수 있습니다. Google 클라이언트 시크릿은 Supabase에 등록하며 Vercel이나 브라우저에 넣지 않습니다. 기존 `client_secret*.json`과 직접 Google OAuth 세션은 이 배포 브랜치에서 사용하지 않습니다.
 
-세션은 SQLite에 7일간 보관하며 서버를 재시작해도 유지됩니다. 세션 토큰은 DB에 SHA-256 해시로 저장합니다. 비로그인 사용자는 시연 화면을 조회할 수 있으며, 기록 변경과 AI API, 그룹 기능은 로그인이 필요합니다.
+### 환경 변수
 
-### 사용자 식별과 DB 저장
+로컬 `.env`와 Vercel의 사용할 배포 환경에 같은 변수 이름으로 등록합니다. 환경 변수 변경 후에는 Vercel을 다시 배포합니다.
 
-Google에서 검증한 ID 토큰의 `sub`를 `users.google_sub`에 고유값으로 저장합니다. 서비스 내부 사용자 ID인 `users.id`는 별도 UUID입니다. 이메일과 이름이 변경되어도 같은 `sub`라면 기존 사용자와 연결하며, 이메일이 같더라도 `sub`가 다르면 별도 사용자로 취급합니다.
+| 변수 | Vercel 타입 | 내용 |
+| --- | --- | --- |
+| `SUPABASE_URL` | Config | 전체 Supabase 프로젝트 URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Config | 브라우저 공개용 publishable 키 |
+| `DEEPSEEK_API_KEY` | Secret | 실제 AI를 사용할 때 등록하는 서버 전용 키 |
+| `AIMERS_DEMO` | Config | `1`은 준비된 AI 답변, `0`은 실제 AI 사용 |
 
-기본 DB 경로는 `data/aimers.sqlite`입니다. `.env`의 `DATABASE_PATH`로 변경할 수 있습니다. DB 파일과 WAL 파일은 Git에서 제외합니다. 서버를 다른 환경으로 옮길 때는 DB를 보존할 영구 디스크를 연결해야 합니다. Google 클라이언트 시크릿과 AI API 키는 서버 환경변수 또는 자격 증명 파일에 보관합니다.
+이전 anon 키는 `SUPABASE_ANON_KEY`로도 사용할 수 있습니다. secret 키나 service_role 키는 사용하지 않습니다. 비로그인 시연 화면은 조회할 수 있지만, main과 동일하게 기록 변경, AI 기능, 그룹 기능에는 로그인이 필요합니다. 서버는 매 요청의 Supabase 액세스 토큰을 검증하고 클라이언트 계정 ID와 비교합니다.
 
-저장 테이블은 다음과 같습니다.
+### DB 마이그레이션
 
-| 테이블 | 저장 내용 |
+새 Supabase 프로젝트에서는 SQL Editor에서 아래 파일을 순서대로 한 번씩 실행합니다. 이미 적용한 파일은 다시 실행하지 않습니다.
+
+1. `supabase/migrations/202611080001_user_states.sql`
+2. `supabase/migrations/202611080002_main_features.sql`
+
+첫 번째 파일을 이미 적용한 기존 시연 서버는 두 번째 파일만 추가로 실행한 뒤 새 코드를 배포합니다. 두 번째 마이그레이션은 기존 `user_states`와 개인 기록을 삭제하거나 교체하지 않습니다. 새 코드가 사용하는 그룹, 알림, AI 이력 테이블과 함수를 추가합니다. SQL 파일 전체가 한 트랜잭션이므로 실패하면 오류를 해결한 뒤 다시 실행합니다.
+
+| 저장소 | 내용 |
 | --- | --- |
-| `users` | 내부 ID, Google sub, 이메일, Google 이름, 가입 시각, 마지막 로그인 |
-| `profiles` | 프로필 사진과 이름, 소개, 공개 여부, 작성 주기, 알림과 화면 설정, 저장 버전 |
-| `categories`, `entries` | 카테고리, 원문, 꼬리질문과 답변, 요약, 날짜, 태그 |
-| `groups`, `memberships` | 그룹, 초대 코드, 실제 사용자 멤버십 |
-| `pokes` | 발신자와 수신자, 기록 기간별 콕 찌르기, 앱 내 알림 읽음 상태 |
-| `sessions`, `oauth_flows` | 로그인 세션과 만료 시각, 진행 중인 OAuth 검증 정보 |
-| `ai_runs` | AI 요청 종류, 입력, 결과, 생성 시각 |
+| Supabase Auth | 사용자 UUID, Google 연결 정보, 로그인 세션 |
+| `user_states` | 프로필, 사진, 개인 기록, 카테고리, 설정, 저장 버전 |
+| `app_groups`, `app_memberships` | 그룹, 초대 코드, 실제 사용자 멤버십 |
+| `app_pokes` | 기간별 콕 찌르기와 수신자의 앱 내 알림 읽음 상태 |
+| `app_ai_runs` | AI 입력과 결과, 최근 활동 조회 |
 
-로그인 후 서버에서 기록을 읽고 변경할 때마다 저장합니다. 여러 기기에서 동시에 수정하면 저장 버전을 비교해 충돌을 알립니다. 실패한 변경 내용은 열린 화면에 유지하며, 재시도하거나 JSON으로 내보낼 수 있습니다. 새로고침하거나 창을 닫기 전에는 저장 상태를 확인해야 합니다. 서버 내용은 페이지를 다시 열거나 브라우저 창으로 돌아올 때 불러옵니다.
+개인 기록은 사용자별 RLS로 보호합니다. 그룹과 AI 이력 테이블은 클라이언트의 직접 접근을 막고, 로그인 사용자와 멤버십을 검사하는 DB 함수를 통해서만 처리합니다. 비공개 기록의 원문은 그룹 멤버에게도 반환하지 않습니다. 그룹 탈퇴 시 공유 접근을 종료하고 소유자를 다음 멤버로 넘기거나 빈 그룹을 삭제합니다.
 
-이전 localStorage 기록이 남아 있으면 개인 프로필에서 가져오기 버튼을 제공합니다. 해당 Google 계정의 이전 기록을 우선하고, 없으면 기존 비로그인 기록을 제안합니다. 사용자가 확인하면 개인 기록과 설정을 교체하며, 현재 그룹과 공개 설정은 유지합니다. 시연용 그룹과 가상 멤버는 이관하지 않고, 원본 localStorage는 삭제하지 않습니다.
+화면과 API는 main의 저장 버전 비교, 실패 시 열린 화면에 변경 내용 유지, 재시도, JSON 내보내기, 명시적인 이전 브라우저 기록 가져오기를 유지합니다. 다른 기기나 계정에서 같은 내용을 동시에 수정하면 덮어쓰기를 차단합니다. 저장 중이거나 실패한 상태에서는 창을 닫기 전에 저장 상태를 확인해야 합니다. 현재 계정 문서의 저장 크기는 최대 약 3 MB입니다.
 
-그룹은 초대 코드로 실제 계정이 참여합니다. 새 계정의 기록은 기본 비공개이며, 공개로 설정하면 같은 그룹의 멤버에게 기록을 제공합니다. 비공개 기록의 본문은 다른 멤버의 API 응답에서 제외합니다. 그룹에서 나가면 공유 접근도 종료됩니다. 콕 찌르기는 DB에 저장하고 그룹 탭의 앱 내 알림으로 전달합니다.
+SQLite 데이터는 자동으로 Supabase에 이관하지 않습니다. main의 `db.js`는 기존 동작 검증용으로 유지하며 배포 서버는 `supabase-db.js`를 사용합니다. 기존 main의 SQLite 사용자 UUID와 Supabase 사용자 UUID는 다르므로 DB 파일을 그대로 복사해서 사용할 수 없습니다.
 
-DB를 백업하려면 서버를 정상 종료한 뒤 `data` 폴더를 복사합니다. 실행 중인 SQLite 파일 하나만 복사하면 WAL에 있는 최신 변경이 빠질 수 있습니다.
+### 배포 후 확인
 
-구현 기준은 [Google 웹 서버 OAuth 문서](https://developers.google.com/identity/protocols/oauth2/web-server)와 [OpenID Connect 문서](https://developers.google.com/identity/openid-connect/openid-connect)입니다.
+Google 로그인, 기존 기록 조회, 새 기록 저장, 다른 기기 재조회, 다른 계정과의 데이터 분리, 그룹 생성과 초대 코드 참여, 공개 설정에 따른 기록 공유, 콕 찌르기 알림과 읽음 처리, AI 실행 이력을 확인합니다. `npm test`는 main의 UI와 API 회귀 테스트 및 PostgreSQL 마이그레이션과 Supabase 저장 어댑터 검증을 포함합니다. 실제 Google OAuth와 배포 환경 검증은 별도로 필요합니다.
+
+공식 설정 안내: [Supabase Google 로그인](https://supabase.com/docs/guides/auth/social-sign-in/auth-google), [Vercel 구성](https://vercel.com/docs/project-configuration/vercel-json).
 
 ## 화면 구성
 
@@ -93,8 +101,8 @@ DB를 백업하려면 서버를 정상 종료한 뒤 `data` 폴더를 복사합�
 | 파일 | 역할 |
 | --- | --- |
 | `server.js` | 정적 파일 제공과 `/api/ai` 엔드포인트 |
-| `auth.js` | Google OAuth 검증과 DB 세션 |
-| `db.js` | SQLite 테이블, 사용자별 저장과 그룹 권한 검증 |
+| `auth.js` | Supabase 액세스 토큰 검증 |
+| `supabase-db.js` | Supabase 저장과 그룹 API 어댑터 |
 | `ai.js` | AI 기능별 프롬프트, 응답 형식, 입력 검증, 시연 모드 답변 |
 | `public/app.js` | 화면과 동작 |
 | `public/logic.js` | 기록 기간, 연속 기록, 학기 계산 |

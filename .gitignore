@@ -10,3 +10,5 @@ data/
 *.db-*
 .claude/
 .DS_Store
+.vercel/
+public/cloud.bundle.js

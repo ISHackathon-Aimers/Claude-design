@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { defaultProfile, validateState } from './db.js';
+import { sessionManager } from './public/session.js';
 
 let moduleId = 0;
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -31,6 +32,10 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false } = 
   let pause;
   const writes = [];
   let reads = 0;
+  const session = { enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } };
+  t.mock.method(sessionManager, 'initialize', async () => session);
+  t.mock.method(sessionManager, 'current', async () => session);
+  t.mock.method(sessionManager, 'headers', async () => ({ authorization: 'Bearer test-access-token' }));
   if (legacy) dom.window.localStorage.setItem('aimers-v1:google:google-user', JSON.stringify({ ...state, profile: { ...state.profile, name: 'Old User' } }));
   // 초기 버전 형식: 화면 모드(theme)가 없고 글꼴(font)·글자 크기 90이 들어 있다
   if (oldLegacy) dom.window.localStorage.setItem('aimers-v1', JSON.stringify({ v: 1,
@@ -155,4 +160,40 @@ test('UI: records from the first app version import even though their profile fo
   assert.equal('font' in a.state.profile, false);
   assert.deepEqual(a.state.entries.map((e) => e.title), ['옛 기록']);
   assert.ok(a.state.categories.includes('동아리')); // 기록에만 있던 카테고리도 함께 들어온다
+});
+
+test('UI: the ⋯ menu on a record edits it in place and deletes it', async (t) => {
+  const a = await app(t);
+  location.hash = '#/records';
+  await until(() => document.querySelector('[data-act="record"]'));
+  document.querySelector('[data-act="record"]').click();
+  const raw = document.querySelector('#rec-raw');
+  raw.value = 'Original text'; raw.dispatchEvent(new a.dom.window.Event('input', { bubbles: true }));
+  document.querySelector('[data-act="rec-next"]').click();
+  await until(() => document.querySelector('[data-act="rec-save"]'));
+  document.querySelector('[data-act="rec-save"]').click();
+  await until(() => a.state.entries.length === 1 && !document.querySelector('#sheet').open);
+  await until(() => document.querySelector('#rec-list .entry'));
+
+  const kebab = document.querySelector('#rec-list [data-act="entry-menu"]');
+  const menu = kebab.nextElementSibling;
+  assert.equal(menu.hidden, true);
+  kebab.click();
+  assert.equal(menu.hidden, false);
+  document.body.click(); // 바깥을 누르면 닫힌다
+  assert.equal(menu.hidden, true);
+
+  kebab.click();
+  menu.querySelector('[data-act="edit-entry"]').click();
+  assert.equal(document.querySelector('#sheet').open, true);
+  const title = document.querySelector('#e-title');
+  title.value = 'Edited title'; title.dispatchEvent(new a.dom.window.Event('input', { bubbles: true }));
+  document.querySelector('[data-act="edit-save"]').click();
+  await until(() => a.state.entries[0]?.title === 'Edited title' && !document.querySelector('#sheet').open);
+  assert.equal(a.state.entries.length, 1);
+  assert.equal(a.state.entries[0].raw, 'Original text');
+
+  document.querySelector('#rec-list [data-act="entry-menu"]').click();
+  document.querySelector('#rec-list [data-act="del-entry"]').click();
+  await until(() => a.state.entries.length === 0);
 });
