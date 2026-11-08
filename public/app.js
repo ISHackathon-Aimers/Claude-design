@@ -813,7 +813,6 @@ function accountCard() {
       ${auth.enabled ? `<button class="btn secondary block google-login" data-act="login" ${auth.busy ? 'disabled' : ''}>Google로 로그인</button>`
         : '<p class="help">Google 로그인을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.</p>'}`}
     <p class="error" role="alert">${esc(auth.error)}</p>
-    ${auth.user && aiRuns.length ? `<details><summary>저장된 AI 활동 ${aiRuns.length}개</summary>${aiRuns.map((run) => `<details><summary>${esc(run.task)} (${esc(new Date(run.createdAt).toLocaleDateString('ko-KR'))})</summary><pre class="ai-history">${esc(JSON.stringify(run.result.data, null, 2))}</pre></details>`).join('')}</details>` : ''}
   </section>`;
 }
 
