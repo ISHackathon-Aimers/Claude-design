@@ -4,7 +4,7 @@ import webpush from 'web-push';
 
 const unavailable = () => Object.assign(new Error('알림 서버 설정이 아직 완료되지 않았어요.'), { status: 503 });
 export function pushConfig(env = process.env) {
-  const enabled = Boolean(env.SUPABASE_URL && env.SUPABASE_SECRET_KEY && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT);
+  const enabled = Boolean(env.SUPABASE_URL && (env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY) && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT);
   return { enabled, publicKey: enabled ? env.VAPID_PUBLIC_KEY : '' };
 }
 export function cronAuthorized(req, env = process.env) {
@@ -35,7 +35,7 @@ export function createPushService({ env = process.env, clientFactory = createCli
   const config = () => pushConfig(env);
   const rpc = async (name, args = {}) => {
     if (!config().enabled) throw unavailable();
-    const client = clientFactory(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    const client = clientFactory(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
     const { data, error } = await client.rpc(name, args);
     if (error) throw new Error(`Push DB operation failed: ${name}`);
     return data;

@@ -33,6 +33,7 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
   let pause;
   const writes = [];
   let reads = 0;
+  let testPushes = 0;
   let canceled = false;
   const session = { enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } };
   t.mock.method(sessionManager, 'initialize', async () => { if (failAuth) throw Object.assign(new Error('로그인 복원 실패'), { status: failAuth === 'expired' ? 401 : 503 }); return session; });
@@ -44,6 +45,7 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     profile: { name: 'First Version', bio: '', photo: '', public: true, periodDays: 7, startDate: '2025-09-13', notify: false, font: 'pretendard', fontScale: 90 },
     categories: ['프로젝트'], entries: [{ id: 'old1', date: '2025-10-01', category: '동아리', title: '옛 기록', summary: '요약', raw: '원문', tags: ['협업'], qa: [] }], groups: [], pokes: {} }));
   globalThis.fetch = async (url, options = {}) => {
+    if (url === '/api/push/test') { testPushes++; return Response.json({ sent: 1, failed: 0, expired: 0 }); }
     if (url === '/api/membership') return failMembership ? Response.json({ error: 'Unavailable' }, { status: 500 }) : Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false });
     if (url === '/api/membership/cancel') { canceled = true; return Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false }); }
     if (url === '/api/auth/session') return Response.json({ enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } });
@@ -75,7 +77,7 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     const field = dom.window.document.querySelector('#pf-name');
     field.value = name; field.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   }
-  return { dom, changeName, writes, get state() { return state; }, get reads() { return reads; },
+  return { dom, changeName, writes, get state() { return state; }, get reads() { return reads; }, get testPushes() { return testPushes; },
     offline: (value) => { failSave = value; }, conflict: () => { stale = true; },
     pauseNextSave: () => { let release; pause = new Promise((resolve) => { release = resolve; }); return () => release(); },
   };
@@ -148,9 +150,14 @@ test('UI: device notification controls enable reminders and preserve a visible e
   t.mock.method(pwa, 'disable', async () => { pwa.state.subscribed = false; });
   t.mock.method(pwa, 'setPokes', async () => { throw new Error('알림 설정 저장 실패'); });
   window.dispatchEvent(new a.dom.window.HashChangeEvent('hashchange'));
+  assert.equal(document.querySelector('[data-act="push-test"]').disabled, true);
   document.querySelector('[data-act="push-enable"]').click();
   await until(() => a.state.profile.notify && document.querySelector('[data-act="push-disable"]'));
   assert.equal(document.querySelector('#pf-notify').disabled, false);
+  assert.match(document.querySelector('[for="pf-notify"]').textContent, /매일 기록 알림/);
+  document.querySelector('[data-act="push-test"]').click();
+  await until(() => a.testPushes === 1 && !document.querySelector('[data-act="push-test"]').disabled);
+  assert.match(document.querySelector('#toast').textContent, /테스트 알림을 전송/);
   document.querySelector('#push-pokes').dispatchEvent(new a.dom.window.Event('change', { bubbles: true }));
   await until(() => document.querySelector('#pwa-title').parentElement.textContent.includes('알림 설정 저장 실패'));
   document.querySelector('[data-act="push-disable"]').click();

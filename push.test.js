@@ -6,10 +6,34 @@ import { createHandler } from './server.js';
 test('push configuration never exposes server keys and cron access fails closed', () => {
   const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SECRET_KEY: 'private-db-key', VAPID_PUBLIC_KEY: 'public', VAPID_PRIVATE_KEY: 'private-vapid', VAPID_SUBJECT: 'https://example.com', CRON_SECRET: 'long-random-secret-value' };
   assert.deepEqual(pushConfig(env), { enabled: true, publicKey: 'public' });
+  assert.deepEqual(pushConfig({ ...env, SUPABASE_SECRET_KEY: '', SUPABASE_SERVICE_ROLE_KEY: 'legacy-private-key' }), { enabled: true, publicKey: 'public' });
   assert.equal(cronAuthorized({ headers: {} }, env), false);
   assert.equal(cronAuthorized({ headers: { authorization: `Bearer ${env.CRON_SECRET}` } }, env), true);
   assert.equal(cronAuthorized({ headers: { authorization: 'Bearer wrong' } }, env), false);
   assert.equal(cronAuthorized({ headers: {} }, {}), false);
+});
+
+test('test push authenticates the owner, rejects untrusted writes and honors server configuration', async () => {
+  let trusted = true; let enabled = true;
+  const queued = []; const drained = [];
+  const auth = Object.assign(async () => false, { getUser: async () => ({ id: 'alice' }), isTrustedWrite: async () => trusted });
+  const handler = createHandler({ auth, push: { config: () => ({ enabled }), drain: async (id) => { drained.push(id); return { sent: 1, failed: 0, expired: 0 }; } },
+    store: () => ({ enqueueTestPush: async (id) => { queued.push(id); } }) });
+  const request = async (method = 'POST', user = 'alice') => {
+    let status; let body;
+    await handler({ url: '/api/push/test', method, headers: { 'x-aimers-user': user } }, { writeHead: (value) => { status = value; }, end: (value) => { body = JSON.parse(value); } });
+    return { status, body };
+  };
+  assert.equal((await request('GET')).status, 405);
+  assert.equal((await request('POST', 'bob')).status, 401);
+  trusted = false;
+  assert.equal((await request()).status, 403);
+  trusted = true; enabled = false;
+  assert.equal((await request()).status, 503);
+  assert.equal(queued.length, 0);
+  enabled = true;
+  assert.equal((await request()).body.sent, 1);
+  assert.deepEqual(queued, ['alice']); assert.deepEqual(drained, ['alice']);
 });
 
 test('push API enforces session ownership and protects scheduled dispatch', async () => {

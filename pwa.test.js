@@ -67,6 +67,17 @@ test('browser unsubscribe still protects a signed-out user if server cleanup is 
   assert.ok(calls.includes('unsubscribe'));
   assert.equal(pwa.state.subscribed, false);
 });
+
+test('changed VAPID keys rotate an existing subscription before saving the new device', async (t) => {
+  const { calls, registration } = await fixture(t);
+  await pwa.enable();
+  const existing = await registration.pushManager.getSubscription();
+  existing.options = { applicationServerKey: Uint8Array.of(1, 2, 3).buffer };
+  assert.equal(pwa.keyChanged(existing), true);
+  calls.length = 0;
+  await pwa.enable();
+  assert.deepEqual(calls, ['permission', 'unsubscribe', 'subscribe', 'save']);
+});
 test('service worker displays pushes, opens the correct screen and never caches API responses', async () => {
   const handlers = {};
   const shown = [];
@@ -78,6 +89,7 @@ test('service worker displays pushes, opens the correct screen and never caches 
   vm.runInNewContext(await readFile(new URL('./public/sw.js', import.meta.url), 'utf8'), { self, URL, fetch: async () => {}, caches: {} });
   handlers.push({ data: { json: () => ({ title: '기록 알림', body: '마감', url: '/#/records', tag: 'record' }) }, waitUntil: (p) => { promise = p; } });
   await promise;
+  assert.equal(shown[0][1].silent, false);
   assert.equal(shown[0][0], '기록 알림');
   const click = (url) => handlers.notificationclick({ notification: { close() {}, data: { url } }, waitUntil: (p) => { promise = p; } });
   click('/#/groups/one'); await promise;

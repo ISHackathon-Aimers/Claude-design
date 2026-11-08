@@ -733,7 +733,9 @@ function insight() {
 }
 
 // ───────── 3번 탭: 내 그룹 ─────────
-const pokeKey = (g, m) => `${g.id}:${m.id}:${periodIndex(todayStr(), m.startDate, m.periodDays)}`;
+const pokeKey = (g, m) => `${g.id}:${m.id}`;
+const pokeCooldown = 5 * 60 * 1000;
+let pokeTimer;
 function groupMembers(g) { return [me(), ...g.members]; }
 
 function groups() {
@@ -757,6 +759,8 @@ function groups() {
 }
 
 function groupDetail(g) {
+  const remaining = g.members.map((m) => Number(S.pokes[pokeKey(g, m)]) + pokeCooldown - Date.now()).filter((ms) => ms > 0);
+  if (remaining.length) pokeTimer = window.setTimeout(() => render(), Math.min(...remaining) + 50);
   const ms = groupMembers(g);
   const done = ms.filter((m) => memberStatus(m).done).length;
   return {
@@ -765,13 +769,13 @@ function groupDetail(g) {
       <div class="group-head"><span class="eyebrow">각자의 이번 기록 기간</span><button class="chip" data-act="copy" data-v="${esc(g.code)}">${icon('copy', 16)} 초대 코드 ${esc(g.code)}</button></div>
       <p><strong>${ms.length}명 중 ${done}명</strong>이 자기 기간의 기록을 마쳤어요.</p>
       <div class="bar" role="img" aria-label="${ms.length}명 중 ${done}명 완료"><span style="width:${(done / ms.length) * 100}%"></span></div>
-      <p class="help">멤버마다 기록 주기와 시작일이 달라요. 자기 기간 안에 아직 기록하지 않은 멤버만 콕 찌를 수 있어요.</p>
+      <p class="help">멤버마다 기록 주기와 시작일이 달라요. 자기 기간 안에 아직 기록하지 않은 멤버만 콕 찌를 수 있어요. 같은 멤버에게는 5분 뒤 다시 보낼 수 있어요.</p>
       <p class="help">${auth.user ? '친구에게 초대 코드를 공유하면 같은 그룹에 참여할 수 있어요.' : '시연용 그룹입니다.'}</p>
       ${auth.user ? `<button class="btn secondary" data-act="leave-group" data-v="${g.id}">그룹 나가기</button>` : ''}
     </section>
     <section class="card"><h2>멤버</h2><ul class="members">${ms.map((m) => {
       const st = memberStatus(m);
-      const poked = !m.me && S.pokes[pokeKey(g, m)];
+      const poked = !m.me && Date.now() - Number(S.pokes[pokeKey(g, m)]) < pokeCooldown;
       return `<li class="member">
         <a class="member-link" href="${m.me ? '#/profile' : `#/groups/${g.id}/m/${m.id}`}">
           ${fireRing(m, st.streak)}
@@ -824,9 +828,11 @@ function pwaCard() {
     : !pwa.installed() ? '<p class="help">브라우저의 앱 설치 또는 홈 화면에 추가 메뉴로 AIMers를 설치할 수 있어요.</p>' : '<p class="help">AIMers 앱으로 실행 중이에요.</p>';
   return `<section class="card" aria-labelledby="pwa-title"><h2 id="pwa-title">앱 설치와 알림</h2>${installHelp}
     ${status.installable ? '<button class="btn secondary" data-act="pwa-install">AIMers 앱 설치</button>' : ''}
-    <p class="help">앱을 닫아도 기록 마감과 그룹 친구의 콕 찌르기 알림을 받을 수 있어요. 알림은 기기마다 켜야 해요.</p>
+    <p class="help">앱을 닫아도 매일 기록 알림과 그룹 친구의 콕 찌르기 알림을 받을 수 있어요. 알림은 기기마다 켜야 해요.</p>
     ${auth.user ? `<p role="status">${!status.ready ? '알림 설정 확인 중...' : status.subscribed ? '이 기기에서 알림을 받고 있어요.' : !status.available ? '홈 화면 설치 여부와 브라우저 지원, 알림 서버 설정을 확인해 주세요.' : '이 기기의 알림이 꺼져 있어요.'}</p>
       <button class="btn ${status.subscribed ? 'secondary' : 'primary'}" data-act="${status.subscribed ? 'push-disable' : 'push-enable'}" ${status.busy || !status.ready || !status.available ? 'disabled' : ''} aria-busy="${status.busy}">${status.busy ? '설정 중...' : status.subscribed ? '이 기기 알림 끄기' : '이 기기에서 알림 받기'}</button>
+      <button class="btn secondary" data-act="push-test" aria-busy="${status.busy}" ${status.busy || !status.subscribed || !status.available ? 'disabled' : ''}>테스트 알림 보내기</button>
+      <p class="help">테스트는 알림을 켠 내 기기에 보내요. 소리는 기기의 알림 설정, 무음 모드, 집중 모드에 따라 달라져요.</p>
       <label class="switch-row" for="push-pokes"><span>콕 찌르기 알림<small>그룹 친구가 내 기록을 기다릴 때 알려 드려요.</small></span><input type="checkbox" role="switch" id="push-pokes" data-push="pokes" ${status.pokes ? 'checked' : ''} ${!status.subscribed || status.busy ? 'disabled' : ''}></label>`
       : '<p class="help">로그인한 뒤 알림을 설정할 수 있어요.</p>'}
     ${status.error ? `<p class="error" role="alert">${esc(status.error)}</p>` : ''}</section>`;
@@ -861,7 +867,7 @@ function profile() {
         <p class="help">${periodName(p.periodDays)} 한 번씩 기록해요. 이번 기간: ${fmtMD(s.ps)} ~ ${fmtMD(s.pe)}</p></div>
       <div class="field"><span class="label" id="pf-start-l">시작 날짜</span>
         <button type="button" class="date-btn" data-act="cal-start" aria-labelledby="pf-start-l pf-start-v">${icon('calendar')}<span id="pf-start-v">${fmtW(p.startDate)}</span></button></div>
-      <label class="switch-row" for="pf-notify"><span>기록 마감 알림<small>미작성 상태라면 마감 2일 전부터 하루 한 번 알려 드려요. 한국 시간 오전 9시대에 발송해요.</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''} ${pwa.state.subscribed ? '' : 'disabled'}></label>
+      <label class="switch-row" for="pf-notify"><span>매일 기록 알림<small>한국 시간 오전 9시대에 하루 한 번 알려 드려요. 기록을 작성한 날에도 보내요.</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''} ${pwa.state.subscribed ? '' : 'disabled'}></label>
     </section>
     <section class="card"><h2>카테고리</h2>
       <p class="help">카테고리를 삭제해도 기록은 지워지지 않고 다른 카테고리로 옮겨져요.</p>
@@ -1009,6 +1015,7 @@ function centerIn(box, el) {
   box.scrollLeft += r.left - b.left - (b.width - r.width) / 2;
 }
 function render(scroll = false) {
+  window.clearTimeout(pokeTimer);
   if (auth.restoreError) return;
   if (auth.loading || (auth.user && !sync.ready)) return;
   current = view();
@@ -1031,6 +1038,16 @@ function render(scroll = false) {
 
 // ───────── 이벤트 ─────────
 const actions = {
+  'push-test': async () => {
+    if (!auth.user || pwa.state.busy || !pwa.state.subscribed) return;
+    pwa.state.busy = true; pwa.state.error = ''; render();
+    try {
+      const result = await api('/api/push/test', { method: 'POST', body: {} });
+      if (result.sent) toast('테스트 알림을 전송했어요. 기기의 알림을 확인해 주세요.');
+      else throw new Error('전송을 완료하지 못했어요. 알림 설정을 확인한 뒤 잠시 후 다시 시도해 주세요.');
+    } catch (error) { pwa.state.error = error.message; }
+    finally { pwa.state.busy = false; render(); }
+  },
   'plan-refresh': async () => { if (membership.loading || membership.busy) return; const pending = refreshMembership(); render(); await pending; render(); },
   'plan-interest': async (el) => {
     const plan = PLANS[el.dataset.v]; if (!plan) return;
@@ -1262,6 +1279,7 @@ const actions = {
     const g = S.groups.find((x) => x.id === el.dataset.g);
     const m = g?.members.find((x) => x.id === el.dataset.v);
     if (!m) return;
+    if (Date.now() - Number(S.pokes[pokeKey(g, m)]) < pokeCooldown) return;
     if (auth.user) {
       try {
         await api(`/api/groups/${g.id}/pokes`, { method: 'POST', body: { recipientId: m.id } });
@@ -1269,7 +1287,7 @@ const actions = {
       } catch (e) { toast(e.message); }
       return;
     }
-    S.pokes[pokeKey(g, m)] = todayStr();
+    S.pokes[pokeKey(g, m)] = Date.now();
     save(); render();
     toast('시연 화면에서 콕 찌르기를 표시했어요.');
   },

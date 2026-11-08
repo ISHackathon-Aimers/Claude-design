@@ -78,6 +78,12 @@ return async function handle(req, res) {
       if (req.headers['x-aimers-user'] !== user.id) return send(res, 401, { error: '로그인 계정이 변경되었습니다. 페이지를 다시 열어 주세요.' });
       if (!['GET', 'HEAD'].includes(req.method) && !await auth.isTrustedWrite(req)) return send(res, 403, { error: '요청 출처를 확인할 수 없습니다.' });
       const db = requestStore = store(req, user);
+      if (url.pathname === '/api/push/test') {
+        if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+        if (!push.config().enabled) return send(res, 503, { error: '알림 서버 설정이 아직 완료되지 않았어요.' });
+        await db.enqueueTestPush(user.id);
+        return send(res, 200, await push.drain(user.id));
+      }
       if (url.pathname === '/api/membership') {
         if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
         return send(res, 200, await db.membership(user.id));

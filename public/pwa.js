@@ -2,6 +2,14 @@ export const pwa = {
   state: { ready: false, available: false, subscribed: false, pokes: true, busy: false, error: '', installable: false },
   installed() { return Boolean(window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone); },
   isIOS() { return /iPad|iPhone|iPod/.test(window.navigator.userAgent) || (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1); },
+  keyBytes() {
+    const key = this.config.publicKey.replace(/-/g, '+').replace(/_/g, '/');
+    return Uint8Array.from(window.atob(key + '='.repeat((4 - key.length % 4) % 4)), (ch) => ch.charCodeAt(0));
+  },
+  keyChanged(subscription) {
+    const previous = subscription?.options?.applicationServerKey;
+    return Boolean(previous && String(new Uint8Array(previous)) !== String(this.keyBytes()));
+  },
   listen() {
     window.addEventListener('beforeinstallprompt', (event) => {
       event.preventDefault(); this.installPrompt = event; this.state.installable = true; this.changed?.();
@@ -26,7 +34,8 @@ export const pwa = {
         const subscription = await this.registration.pushManager.getSubscription();
         if (subscription) {
           const status = await api('/api/push/subscription', { method: 'POST', body: { action: 'get', subscription: { endpoint: subscription.endpoint } } });
-          this.state.subscribed = Boolean(status.subscribed && window.Notification.permission === 'granted');
+          this.state.subscribed = Boolean(status.subscribed && window.Notification.permission === 'granted' && !this.keyChanged(subscription));
+          if (this.keyChanged(subscription)) this.state.error = '알림 설정이 변경됐어요. 이 기기에서 알림 받기를 다시 눌러 주세요.';
           this.state.pokes = status.pokes ?? true;
         }
       }
@@ -42,11 +51,9 @@ export const pwa = {
     await window.navigator.serviceWorker.ready;
     let subscription = await this.registration.pushManager.getSubscription();
     // An unknown endpoint can belong to a previously signed-in account. Rotate it instead of taking it over.
-    if (subscription && !this.state.subscribed) { await subscription.unsubscribe(); subscription = null; }
+    if (subscription && (!this.state.subscribed || this.keyChanged(subscription))) { await subscription.unsubscribe(); subscription = null; }
     if (!subscription) {
-      const key = this.config.publicKey.replace(/-/g, '+').replace(/_/g, '/');
-      const bytes = Uint8Array.from(window.atob(key + '='.repeat((4 - key.length % 4) % 4)), (ch) => ch.charCodeAt(0));
-      subscription = await this.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes });
+      subscription = await this.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: this.keyBytes() });
     }
     try {
       await this.api('/api/push/subscription', { method: 'POST', body: { action: 'save', subscription: { ...subscription.toJSON(), pokes: this.state.pokes } } });

@@ -23,6 +23,8 @@ export class SupabaseStore {
         GROUP_LIMIT: [400, '참여 가능한 그룹 또는 멤버 수를 초과했습니다.'],
         POKE_UNAVAILABLE: [400, '현재 기록을 독촉할 수 없는 멤버입니다.'], INVALID_INPUT: [400, '입력 내용을 확인해 주세요.'],
         DEVICE_LIMIT: [400, '알림은 계정당 최대 10개 기기에서 사용할 수 있어요.'],
+        PUSH_NOT_SUBSCRIBED: [400, '먼저 이 기기에서 알림 받기를 눌러 주세요.'],
+        PUSH_RATE_LIMIT: [429, '테스트 알림은 1분 뒤 다시 보낼 수 있어요.'],
         SUBSCRIPTION_IN_USE: [409, '이 기기의 기존 알림을 해제한 뒤 다시 시도해 주세요.'],
       };
       const code = Object.keys(known).find((key) => error.message?.includes(key));
@@ -59,6 +61,7 @@ export class SupabaseStore {
   }
   aiHistory(userId) { this.own(userId); return this.rpc('app_ai_history', { p_run: null }); }
   membership(userId) { this.own(userId); return this.rpc('app_membership', {}); }
+  enqueueTestPush(userId) { this.own(userId); return this.rpc('app_enqueue_test_push', {}); }
   cancelMembership(userId) { this.own(userId); return this.rpc('app_cancel_membership', {}); }
   pushSubscription(userId, action, subscription) {
     this.own(userId);
