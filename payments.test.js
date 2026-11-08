@@ -10,12 +10,12 @@ import { createHandler, readPaymentWebhook } from './server.js';
 const user = { id: '00000000-0000-4000-8000-000000000001', email: 'a@example.com' };
 const other = '00000000-0000-4000-8000-000000000002';
 const id = 'aimers-00000000-0000-4000-8000-000000000001';
-const env = { PORTONE_STORE_ID: 'store-test', PORTONE_CHANNEL_KEY: 'channel-test', PORTONE_API_SECRET: 'private-api', PORTONE_WEBHOOK_SECRET: Buffer.from('webhook-secret').toString('base64'), SUPABASE_URL: 'https://db.example.com', SUPABASE_SECRET_KEY: 'private-db', PAYMENT_ORIGIN: 'https://app.example.com' };
-function fixture() {
+const env = { PAYMENTS_ENABLED: '1', PORTONE_STORE_ID: 'store-test', PORTONE_CHANNEL_KEY: 'channel-test', PORTONE_API_SECRET: 'private-api', PORTONE_WEBHOOK_SECRET: Buffer.from('webhook-secret').toString('base64'), SUPABASE_URL: 'https://db.example.com', SUPABASE_SECRET_KEY: 'private-db', PAYMENT_ORIGIN: 'https://app.example.com' };
+function fixture(overrides = {}) {
   const order = { id, user_id: user.id, plan: 'monthly', amount: 2990, store_id: env.PORTONE_STORE_ID, channel_key: env.PORTONE_CHANNEL_KEY };
   let payment = { id, storeId: order.store_id, channel: { key: order.channel_key }, status: 'PAID', customer: { id: user.id }, amount: { total: 2990, cancelled: 0 }, currency: 'KRW', paidAt: new Date().toISOString() };
   const calls = []; let reads = 0; let providerError;
-  const service = createPaymentService({ env,
+  const service = createPaymentService({ env: { ...env, ...overrides },
     clientFactory: (_url, key) => { assert.equal(key, env.SUPABASE_SECRET_KEY); return { rpc: async (name, args) => {
       calls.push([name, args]);
       if (name === 'app_payment_create') return { data: { ...order, id: args.p_id, plan: args.p_plan, amount: args.p_plan === 'annual' ? 29900 : 2990 } };
@@ -40,6 +40,17 @@ test('payments: config fails closed and never exposes secrets; SDK orders use se
   assert.equal(order.billingKey, undefined);
   await assert.rejects(f.service.prepare(user, '__proto__'), { status: 400 });
   await assert.rejects(createPaymentService({ env: {} }).prepare(user, 'monthly'), { status: 503 });
+});
+
+test('payments: complete keys cannot start checkout without explicit enablement; existing payments still reconcile', async () => {
+  assert.equal(paymentConfig({ ...env, PAYMENTS_ENABLED: undefined }).enabled, false);
+  const f = fixture({ PAYMENTS_ENABLED: '0' });
+  assert.equal(f.service.config().configured, true);
+  assert.equal(f.service.config().enabled, false);
+  await assert.rejects(f.service.prepare(user, 'monthly'), { status: 503 });
+  await assert.rejects(f.service.resume(user, id), { status: 503 });
+  assert.equal(f.calls.length, 0); assert.equal(f.reads, 0);
+  assert.equal((await f.service.confirm(user, id)).status, 'PAID');
 });
 
 test('payments: another owner cannot confirm or resume an order; forged payment attributes never grant access', async () => {
