@@ -152,3 +152,17 @@ Google 로그인, 기존 기록 조회, 새 기록 저장, 다른 기기 재조�
 실기기 확인은 홈 화면 설치, Google 로그인, 알림 허용, 다른 계정의 콕 찌르기, 알림 탭 후 그룹 이동, 기기 알림 끄기 순서로 합니다. 기록 마감 알림은 미작성 상태와 작성 주기를 확인한 뒤 Production 예약 실행과 로그를 점검합니다. 자동 테스트는 권한 흐름과 DB 소유권, 중복 방지, 재시도, 만료 구독 정리, 서비스 워커 클릭 경로를 검증하며 실제 Apple과 Google 푸시 서버의 수신을 증명하지는 않습니다.
 
 공식 안내: [Apple Web Push](https://webkit.org/blog/13878/), [Vercel Cron 제약](https://vercel.com/docs/cron-jobs/usage-and-pricing), [Cron 인증](https://vercel.com/docs/cron-jobs/manage-cron-jobs).
+
+## 로그인 유지와 세션 복원
+
+Supabase 세션과 갱신 토큰을 브라우저의 영구 저장소에 보관합니다. 기본 localStorage와 기존 Supabase 저장 키를 그대로 사용하며, localStorage 사용이 차단된 환경에서는 IndexedDB를 사용합니다. 두 저장소 모두 사용할 수 없으면 로그인 전에 저장 설정을 확인하도록 안내합니다. 임시 메모리 로그인으로 조용히 전환하지 않습니다.
+
+같은 주소와 같은 브라우저 또는 같은 홈 화면 앱을 다시 열면 저장된 세션을 복원합니다. Supabase SDK가 만료 토큰을 갱신하며, 서버 API가 401을 반환하면 세션을 한 번 갱신하고 같은 요청을 한 번 재시도합니다. 갱신 중 계정이 바뀌면 이전 계정의 요청을 다른 계정으로 보내지 않습니다. 앱을 다시 활성화하거나 뒤로 가기로 복원할 때도 세션을 확인합니다.
+
+일시적인 연결 실패는 로그인 만료로 처리하지 않습니다. 초기 복원이 실패하면 다시 연결하기를 제공하고, 실제로 무효화된 세션에는 로그인 버튼을 제공합니다. 명시적으로 로그아웃하면 Supabase 세션을 종료하고 기기 알림 구독도 해제합니다.
+
+로그인 정보는 사이트 주소별로 분리됩니다. `claude-design-green.vercel.app`, Preview 배포 주소, localhost는 각각 로그인해야 합니다. 평소에는 고정 Production 주소로 접속하세요. Safari와 홈 화면 앱도 저장소가 다를 수 있어 각각 처음 한 번 로그인해야 할 수 있습니다. 브라우저 데이터 삭제, 시크릿 모드, OS의 저장 데이터 정리, 관리자에 의한 세션 취소까지 막는 것은 아닙니다.
+
+Supabase Authentication의 Sessions 설정에서 Inactivity timeout, Time-box user sessions, Single session per user를 사용하면 해당 정책에 따라 재로그인이 필요할 수 있습니다. JWT 만료 시간을 길게 늘리는 방식으로 해결하지 않고, 기본 만료 시간과 갱신 토큰을 사용합니다. 새 SQL이나 환경 변수는 필요하지 않습니다.
+
+테스트는 실제 Supabase SDK와 모의 인증 서버를 사용해 localStorage와 IndexedDB에서 재접속, 만료 토큰 갱신, 로그아웃을 검증합니다. 실제 Safari와 홈 화면 앱의 장기 재접속 검증은 별도로 필요합니다. [Supabase 세션 안내](https://supabase.com/docs/guides/auth/sessions).

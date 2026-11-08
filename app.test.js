@@ -12,7 +12,7 @@ async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); }
   assert.fail('UI did not reach the expected state');
 }
-async function app(t, { failLoad = false, legacy = false, oldLegacy = false } = {}) {
+async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false } = {}) {
   const html = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:3000/#/profile' });
   t.after(() => dom.window.close());
@@ -34,7 +34,7 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false } = 
   const writes = [];
   let reads = 0;
   const session = { enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } };
-  t.mock.method(sessionManager, 'initialize', async () => session);
+  t.mock.method(sessionManager, 'initialize', async () => { if (failAuth) throw Object.assign(new Error('로그인 복원 실패'), { status: failAuth === 'expired' ? 401 : 503 }); return session; });
   t.mock.method(sessionManager, 'current', async () => session);
   t.mock.method(sessionManager, 'headers', async () => ({ authorization: 'Bearer test-access-token' }));
   if (legacy) dom.window.localStorage.setItem('aimers-v1:google:google-user', JSON.stringify({ ...state, profile: { ...state.profile, name: 'Old User' } }));
@@ -77,6 +77,22 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false } = 
     pauseNextSave: () => { let release; pause = new Promise((resolve) => { release = resolve; }); return () => release(); },
   };
 }
+
+test('UI: an invalidated session offers explicit sign-in instead of an endless reconnect loop', async (t) => {
+  const a = await app(t, { failAuth: 'expired' });
+  assert.ok(document.querySelector('[data-act="login"]'));
+  assert.equal(document.querySelector('[data-act="retry-auth"]'), null);
+  assert.equal(a.writes.length, 0);
+});
+
+test('UI: temporary auth restoration errors show retry without opening a guest account or writing data', async (t) => {
+  const a = await app(t, { failAuth: true });
+  assert.ok(document.querySelector('[data-act="retry-auth"]'));
+  assert.equal(document.querySelector('#pf-name'), null);
+  assert.equal(document.querySelector('[data-act="login"]'), null);
+  assert.equal(a.writes.length, 0);
+  assert.equal(a.reads, 0);
+});
 
 test('UI: device notification controls enable reminders and preserve a visible error on failure', async (t) => {
   const a = await app(t);

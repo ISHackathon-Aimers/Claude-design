@@ -27,6 +27,13 @@ test('authentication verifies access tokens with Supabase rather than trusting c
   }), { status: 401 });
 });
 
+test('temporary Supabase outages are 503 responses rather than false session expiration', async () => {
+  await assert.rejects(requireUser({ headers: { authorization: 'Bearer valid-token' } }, {
+    config: { enabled: true, supabaseUrl: 'https://example.supabase.co', supabaseKey: 'sb_publishable_public' },
+    clientFactory: () => ({ auth: { getUser: async () => ({ data: { user: null }, error: { name: 'AuthRetryableFetchError', status: 503 } }) } }),
+  }), { status: 503 });
+});
+
 test('writes reject cross-origin browser requests', async () => {
   const headers = { host: 'app.example.com', origin: 'https://app.example.com', 'x-requested-with': 'AIMers' };
   assert.equal(await handleAuth.isTrustedWrite({ headers }), true);

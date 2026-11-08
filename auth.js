@@ -20,6 +20,9 @@ export async function requireUser(req, { config = publicConfig(), clientFactory 
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
   const { data, error } = await client.auth.getUser(token);
+  if (error && (error.name === 'AuthRetryableFetchError' || error.status >= 500)) {
+    throw Object.assign(new Error('로그인 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'), { status: 503 });
+  }
   if (error || !data.user) throw Object.assign(new Error('로그인이 만료되었습니다. 다시 로그인해 주세요.'), { status: 401 });
   return data.user;
 }

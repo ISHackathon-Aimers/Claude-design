@@ -5,7 +5,7 @@ pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
-const auth = { loading: true, enabled: false, user: null, error: '', busy: false };
+const auth = { loading: true, enabled: false, user: null, error: '', busy: false, restoreError: false };
 const sync = { ready: false, revision: 0, generation: 0, pending: null, saving: null, error: '', conflict: false };
 let legacyState = null;
 let aiRuns = [];
@@ -123,8 +123,8 @@ function initialState() {
   return s;
 }
 async function api(url, { method = 'GET', body } = {}) {
-  const res = await fetch(url, { method,
-    headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user?.id || '', ...await sessionManager.headers() },
+  const res = await sessionManager.request(url, { method,
+    headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user?.id || '' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await res.json().catch(() => ({ error: '서버 응답을 읽지 못했어요.' }));
   if (!res.ok) throw Object.assign(new Error(data.error || '요청에 실패했어요.'), { status: res.status });
@@ -210,7 +210,7 @@ async function ai(task, input) {
   if (!auth.user) throw new Error('AI 기능을 사용하려면 Google로 로그인해 주세요.');
   let res;
   try {
-    res = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id, ...await sessionManager.headers() }, body: JSON.stringify({ task, input }) });
+    res = await sessionManager.request('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'AIMers', 'x-aimers-user': auth.user.id }, body: JSON.stringify({ task, input }) });
   } catch {
     throw new Error('서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.');
   }
@@ -958,6 +958,7 @@ function centerIn(box, el) {
   box.scrollLeft += r.left - b.left - (b.width - r.width) / 2;
 }
 function render(scroll = false) {
+  if (auth.restoreError) return;
   if (auth.loading || (auth.user && !sync.ready)) return;
   current = view();
   renderTop();
@@ -979,6 +980,7 @@ function render(scroll = false) {
 
 // ───────── 이벤트 ─────────
 const actions = {
+  'retry-auth': () => location.reload(),
   'pwa-install': async () => { try { await pwa.install(); } catch { toast('브라우저의 설치 메뉴를 사용해 주세요.'); } },
   'push-enable': async () => {
     if (!auth.user || pwa.state.busy) return;
@@ -1321,8 +1323,17 @@ async function initAuth() {
     const session = await sessionManager.initialize();
     auth.enabled = session.enabled;
     auth.user = session.user;
-  } catch {
-    auth.error = '로그인 상태를 확인하지 못했어요. 페이지를 새로고침해 주세요.';
+  } catch (error) {
+    if (error.status === 401) {
+      auth.loading = false; auth.enabled = true; auth.error = error.message;
+      S = seed(); location.hash = '#/profile'; applyPrefs(); render();
+      return;
+    }
+    auth.loading = false; auth.restoreError = true;
+    auth.error = error.message || '로그인 상태를 확인하지 못했어요.';
+    renderTop();
+    $('#main').innerHTML = `<section class="card"><h1>로그인 정보를 복원하지 못했어요</h1><p class="error" role="alert">${esc(auth.error)}</p><p class="help">인터넷 연결과 사이트 데이터 저장 설정을 확인한 뒤 다시 시도해 주세요.</p><button class="btn primary" data-act="retry-auth">다시 연결하기</button></section>`;
+    return;
   }
   const url = new URL(location.href);
   const error = url.searchParams.get('auth_error');
@@ -1357,8 +1368,10 @@ async function initAuth() {
   if (success && auth.user) toast(`${auth.user.name}님, 로그인했어요.`);
 }
 
-window.addEventListener('focus', async () => {
-  if (auth.loading) return;
+let resumingSession = false;
+async function resumeSession() {
+  if (auth.loading || auth.restoreError || resumingSession || document.visibilityState === 'hidden') return;
+  resumingSession = true;
   try {
     const session = await sessionManager.current();
     if (session.user?.id !== auth.user?.id) {
@@ -1371,8 +1384,12 @@ window.addEventListener('focus', async () => {
         S = data.state; sync.revision = data.revision; applyPrefs(); render();
       }
     }
-  } catch { /* 연결이 복구되면 다음 포커스에서 다시 확인한다. */ }
-});
+  } catch { /* Keep the current session and unsaved edits on temporary network errors. */ }
+  finally { resumingSession = false; }
+}
+window.addEventListener('focus', resumeSession);
+window.addEventListener('pageshow', resumeSession);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resumeSession(); });
 window.addEventListener('online', () => { if (sync.pending && !sync.conflict) flushSave(); });
 window.addEventListener('beforeunload', (ev) => {
   if (sync.pending || sync.saving) { ev.preventDefault(); ev.returnValue = ''; }
