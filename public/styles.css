@@ -581,38 +581,7 @@ button.more { border: 0; background: none; padding: 0; cursor: pointer; }
 .day-list { scrollbar-width: none; }
 .day-list::-webkit-scrollbar { display: none; }
 
-/* ───────── 반응형: 폰 → 폴더블/태블릿 → 노트북 ─────────
-   폰: 한 줄 + 아래 탭바 / 태블릿: 넓은 한 줄 / 노트북: 왼쪽 메뉴 + 넓은 본문 */
-@media (min-width: 600px) {
-  :root { --app-w: 640px; }
-  main { padding-inline: 24px; gap: 20px; }
-  .sheet { border-radius: 20px; margin: auto; max-width: 560px; }
-}
-@media (min-width: 900px) {
-  :root { --app-w: 880px; --rail-w: 220px; }
-  .app { max-width: none; margin: 0; padding-left: var(--rail-w); border-inline: 0; }
-  .topbar, main, .save-status { max-width: 880px; margin-inline: auto; width: 100%; }
-  main { padding: 24px 32px 48px; }
-  /* 아래 탭바 → 왼쪽 세로 메뉴 */
-  .tabbar {
-    left: 0; bottom: 0; top: 0; transform: none; width: var(--rail-w); max-width: none; height: auto;
-    padding: 24px 12px; display: flex; flex-direction: column; gap: 4px;
-    border: 0; border-right: 1px solid var(--border); border-radius: 0;
-    background: var(--bg); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
-  }
-  .tabbar a { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 0 16px; border-radius: 12px; font-size: 1rem; min-height: 48px; }
-  .tabbar a:hover { background: var(--surface-2); }
-  .tabbar a[aria-current="page"] { background: var(--primary-soft); }
-  .sheet { max-width: 600px; }
-  /* 대시보드: 카드를 2열로 */
-  main[data-view="dashboard"] { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-  main[data-view="dashboard"] > :first-child,
-  main[data-view="dashboard"] > .stats { grid-column: 1 / -1; }
-}
-@media (min-width: 1400px) {
-  :root { --rail-w: 260px; }
-  .topbar, main, .save-status { max-width: 1040px; }
-}
+/* Keep the centered mobile layout and bottom navigation on every screen size. */
 @media (max-width: 360px) {
   main { padding-inline: 12px; }
   .tabbar a { font-size: 0.625rem; }
