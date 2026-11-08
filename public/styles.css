@@ -527,3 +527,45 @@ input[type="range"] { width: 100%; accent-color: var(--primary); min-height: 44p
 .svc-stat { justify-self: start; font-size: 0.8125rem; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; }
 .done-txt { color: var(--ok); font-weight: 600; }
 #main:focus, #main:focus-visible { outline: none; }
+
+/* 내 기록 검색 */
+.search-row { display: flex; gap: 8px; align-items: center; }
+.search {
+  flex: 1; display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text-2);
+}
+.search:focus-within { outline: 2px solid var(--ring); border-color: transparent; }
+.search input { flex: 1; min-width: 0; border: 0; background: transparent; font-size: 1rem; color: var(--text); padding: 0; min-height: 44px; }
+.search input:focus { outline: none; }
+.date-pick { border: 1px solid var(--border); border-radius: 12px; width: 48px; height: 48px; background: var(--surface); }
+.date-pick.on { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.chip.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); font-weight: 600; }
+.result-line { font-size: 0.875rem; color: var(--text-2); }
+.result-line strong { color: var(--text); }
+.rec-list { display: grid; gap: 16px; }
+
+/* 대시보드: 고른 날짜와 그날 기록 */
+.day[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); }
+.day[aria-pressed="true"] .dw, .day[aria-pressed="true"] .dn { color: var(--primary-ink); }
+.day[aria-pressed="true"].has .dot { background: var(--primary-ink); }
+.day-panel { display: grid; gap: 4px; padding: 12px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); }
+.day-panel .list-head strong { font-size: 0.9375rem; }
+.day-panel .btn { justify-self: start; margin-top: 4px; }
+.day-panel .mini-row .ic { color: var(--text-2); flex: none; }
+button.more { border: 0; background: none; padding: 0; cursor: pointer; }
+
+/* 그날 기록 칸: 기록 수와 상관없이 높이를 고정해 아래 버튼이 움직이지 않게 한다 */
+.day-panel { height: 150px; grid-template-rows: auto 1fr; align-content: stretch; overflow: hidden; }
+.day-title { font-size: 0.9375rem; }
+.day-list { overflow-y: auto; overscroll-behavior: contain; }
+.day-empty { align-self: center; text-align: center; font-size: 0.9375rem; }
+
+/* 기록 작성: 카테고리 + 버튼 */
+.add-chip { padding: 0 12px; color: var(--primary); border-style: dashed; border-color: var(--primary); }
+.add-chip[aria-expanded="true"] { background: var(--primary-soft); }
+.add-cat-form { animation: pop 140ms ease-out; }
+
+/* 그날 기록 칸: 1개면 가운데, 여러 개면 스크롤 막대 없이 넘기기 */
+.day-list.single { align-self: center; }
+.day-list { scrollbar-width: none; }
+.day-list::-webkit-scrollbar { display: none; }

@@ -82,3 +82,18 @@ test('서버: 정적 파일, 경로 탈출 차단, API', async () => {
     srv.close();
   }
 });
+
+test('기록 검색: 날짜 모양이면 날짜로, 아니면 글자로 찾는다', async () => {
+  const { parseDateQuery, matchEntry } = await import('./public/logic.js');
+  assert.deepEqual(parseDateQuery('2026.11.08'), { y: 2026, m: 11, d: 8 });
+  assert.deepEqual(parseDateQuery('2026-11-08'), { y: 2026, m: 11, d: 8 });
+  assert.deepEqual(parseDateQuery('11.08'), { m: 11, d: 8 });
+  assert.deepEqual(parseDateQuery('11월 8일'), { m: 11, d: 8 });
+  assert.deepEqual(parseDateQuery('11월'), { m: 11 });
+  assert.deepEqual(parseDateQuery('2026년 11월'), { y: 2026, m: 11 });
+  assert.equal(parseDateQuery('팀 프로젝트'), null);
+  const e = { date: '2026-11-08', title: '축제 부스팀', summary: '키캡 구매 담당', raw: '', category: '대외활동', tags: ['협업'], qa: [{ q: '역할?', a: '구매처 비교' }] };
+  assert.ok(matchEntry(e, '11.08') && matchEntry(e, '11월') && !matchEntry(e, '11.18') && !matchEntry(e, '10월'));
+  assert.ok(matchEntry(e, '키캡') && matchEntry(e, '부스팀 협업') && matchEntry(e, '구매처') && matchEntry(e, ''));
+  assert.ok(!matchEntry(e, '키캡 발표'));
+});
