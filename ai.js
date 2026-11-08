@@ -22,6 +22,7 @@ function cleanEntries(v, max = 80) {
       category: str(e?.category, 30),
       date: str(e?.date, 10),
       tags: list(e?.tags, 6).map((t) => str(t, 20)).filter(Boolean),
+      detail: str(e?.detail, 1500),
     }))
     .filter((e) => e.id && (e.title || e.summary));
 }
@@ -152,8 +153,10 @@ tags는 이 경험에서 드러나는 역량을 주어진 목록에서 1~3개 �
 
   match: {
     instruction: `자기소개서 문항과 사용자의 경험 기록 목록을 받는다. 문항에 쓰기 가장 적합한 기록을 최대 3개 고른다.
-id는 기록의 id를 그대로 쓰고, reason에는 왜 적합한지, angle에는 이 문항에 맞춰 어떤 부분을 강조해 쓰면 좋은지 한 문장씩 쓴다.`,
-    schema: obj({ matches: { type: 'array', items: obj({ id: S, reason: S, angle: S }) } }),
+추천은 반드시 기록에 적힌 사실에 근거한다. 문항과 관련된 기록이 없으면 matches를 빈 배열로 한다.
+id는 기록의 id를 그대로 쓴다. evidence에는 그 기록의 title, summary, detail 중 문항과 관련된 문장을 한 글자도 바꾸지 말고 그대로 옮긴다.
+reason에는 evidence가 왜 문항에 맞는지, angle에는 이 문항에 맞춰 어떤 부분을 강조해 쓰면 좋은지 한 문장씩 쓴다. 기록에 없는 내용은 쓰지 않는다.`,
+    schema: obj({ matches: { type: 'array', items: obj({ id: S, evidence: S, reason: S, angle: S }) } }),
     clean: (i) => {
       const prompt = str(i.prompt, 500);
       const entries = cleanEntries(i.entries);
@@ -161,31 +164,39 @@ id는 기록의 id를 그대로 쓰고, reason에는 왜 적합한지, angle에�
       return entries.length ? { prompt, entries } : '먼저 경험을 기록해 주세요.';
     },
     demo: ({ prompt, entries }) => {
-      const want = guessTags(prompt);
+      const want = TAG_RULES.filter(([, re]) => re.test(prompt));
       const words = prompt.split(/[^가-힣a-zA-Z0-9]+/).filter((w) => w.length >= 2);
+      const hits = (s) => want.filter(([, re]) => re.test(s)).length * 2 + words.filter((w) => s.includes(w)).length;
       const scored = entries
         .map((e) => {
-          const text = `${e.title} ${e.summary}`;
-          const hit = want.filter((t) => e.tags.includes(t));
-          return { e, hit, score: hit.length * 2 + words.filter((w) => text.includes(w)).length };
+          const sentences = [e.summary, ...e.detail.split(/\n|(?<=[.!?])\s+/)].map((s) => s.trim()).filter(Boolean);
+          const best = sentences.map((s) => ({ s, score: hits(s) })).sort((a, b) => b.score - a.score)[0];
+          return { e, best, score: (best?.score || 0) + want.filter(([t]) => e.tags.includes(t)).length };
         })
+        .filter((x) => x.best?.score > 0) // 근거 문장이 없는 기록은 추천하지 않는다
         .sort((a, b) => b.score - a.score)
         .slice(0, 3);
       return {
-        matches: scored.map(({ e, hit }) => ({
-          id: e.id,
-          reason: hit.length ? `문항이 묻는 '${hit[0]}' 역량이 이 경험에서 드러납니다.` : '문항의 핵심 단어와 관련된 경험입니다.',
-          angle: '본인이 직접 한 행동과 그 결과를 중심으로 쓰세요.',
-        })),
+        matches: scored.map(({ e, best }) => {
+          const tag = want.find(([t, re]) => e.tags.includes(t) || re.test(best.s))?.[0];
+          return {
+            id: e.id,
+            evidence: best.s,
+            reason: tag ? `기록에 문항이 묻는 '${tag}' 경험이 구체적으로 적혀 있습니다.` : '기록에 문항의 핵심 내용과 직접 관련된 행동이 적혀 있습니다.',
+            angle: '근거 문장 속 본인의 행동과 그 결과를 중심으로 쓰세요.',
+          };
+        }),
       };
     },
     normalize: (d, input) => {
-      const ids = knownIds(input);
+      const squash = (s) => s.replace(/[\s"'“”‘’]/g, '');
+      const texts = new Map(input.entries.map((e) => [e.id, squash(`${e.title}\n${e.summary}\n${e.detail}`)]));
       const seen = new Set();
       return {
         matches: list(d?.matches, 6)
-          .filter((m) => ids.has(m?.id) && !seen.has(m.id) && seen.add(m.id))
-          .map((m) => ({ id: m.id, reason: str(m.reason, 300), angle: str(m.angle, 300) }))
+          .map((m) => ({ id: m?.id, evidence: str(m?.evidence, 400).replace(/^["'“‘]+|["'”’]+$/g, ''), reason: str(m?.reason, 300), angle: str(m?.angle, 300) }))
+          // 근거가 실제 그 기록에 있는 문장일 때만 남긴다
+          .filter((m) => texts.has(m.id) && m.evidence && texts.get(m.id).includes(squash(m.evidence)) && !seen.has(m.id) && seen.add(m.id))
           .slice(0, 3),
       };
     },
@@ -233,32 +244,37 @@ semesters에는 입력과 같은 label마다 그 학기를 한두 문장으로 �
   },
 };
 
-export const isDemo = () => process.env.AIMERS_DEMO === '1' || !(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+export const isDemo = () => process.env.AIMERS_DEMO === '1' || !process.env.DEEPSEEK_API_KEY;
 
-let sdk; // SDK는 실제 호출할 때만 불러온다: 설치 전에도 시연 모드는 동작
-async function callClaude(task, input) {
-  sdk ??= await import('@anthropic-ai/sdk').then((m) => ({ Anthropic: m.default, client: new m.default() }));
-  const res = await sdk.client.beta.messages.create({
-    model: process.env.AIMERS_MODEL || 'claude-opus-5-5',
-    max_tokens: 16000,
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default', // 안전 분류기가 거절하면 서버에서 다른 모델로 다시 시도
-    output_config: { effort: 'low', format: { type: 'json_schema', schema: task.schema } },
-    system: `${BASE}\n\n${task.instruction}`,
-    messages: [{ role: 'user', content: `다음은 사용자의 자료입니다.\n\n${JSON.stringify(input)}` }],
+// DeepSeek Chat Completions (JSON 모드). JSON 모드는 형식만 보장하므로 스키마는 프롬프트로 알려 주고 normalize에서 다시 검증한다.
+async function callModel(task, input) {
+  const res = await fetch(`${process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'}/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}` },
+    body: JSON.stringify({
+      model: process.env.AIMERS_MODEL || 'deepseek-flash',
+      response_format: { type: 'json_object' },
+      max_tokens: 4000,
+      messages: [
+        { role: 'system', content: `${BASE}\n\n${task.instruction}\n\n반드시 아래 JSON 스키마를 따르는 JSON 객체 하나만 출력한다.\n${JSON.stringify(task.schema)}` },
+        { role: 'user', content: `다음은 사용자의 자료입니다.\n\n${JSON.stringify(input)}` },
+      ],
+    }),
+    signal: AbortSignal.timeout(60_000),
   });
-  if (res.stop_reason === 'refusal') throw new Error('refusal');
-  if (res.stop_reason === 'max_tokens') throw new Error('max_tokens');
-  return JSON.parse(res.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
+  if (!res.ok) throw Object.assign(new Error(`DeepSeek HTTP ${res.status}`), { status: res.status });
+  const choice = (await res.json()).choices?.[0];
+  if (choice?.finish_reason === 'length') throw new Error('응답이 너무 길어 잘렸습니다.');
+  return JSON.parse(choice?.message?.content ?? '');
 }
 
 function noteFor(e) {
-  const A = sdk?.Anthropic;
-  if (A && e instanceof A.AuthenticationError) return 'API 키가 올바르지 않습니다.';
-  if (A && e instanceof A.RateLimitError) return 'AI 요청이 많아 잠시 쉬어야 합니다.';
-  if (A && e instanceof A.APIConnectionError) return 'AI 서버에 연결하지 못했습니다.';
-  if (A && e instanceof A.APIError) return `AI 오류가 발생했습니다(${e.status}).`;
-  if (e?.code === 'ERR_MODULE_NOT_FOUND') return 'AI 패키지가 설치되지 않았습니다(npm install).';
+  if (e?.status === 401) return 'AI API 키가 올바르지 않습니다.';
+  if (e?.status === 402) return 'AI API 잔액이 부족합니다.';
+  if (e?.status === 429) return 'AI 요청이 많아 잠시 쉬어야 합니다.';
+  if (e?.status >= 500) return 'AI 서버에 문제가 생겼습니다.';
+  if (e?.name === 'TimeoutError') return 'AI 응답이 너무 늦습니다.';
+  if (e?.name === 'TypeError') return 'AI 서버에 연결하지 못했습니다.';
   return 'AI 응답을 처리하지 못했습니다.';
 }
 
@@ -269,7 +285,7 @@ export async function runTask(name, rawInput) {
   if (typeof input === 'string') return { error: input };
   if (isDemo()) return { data: task.normalize(task.demo(input), input), demo: true };
   try {
-    return { data: task.normalize(await callClaude(task, input), input) };
+    return { data: task.normalize(await callModel(task, input), input) };
   } catch (e) {
     console.error(`[AI] ${name} 실패:`, e?.message);
     return { data: task.normalize(task.demo(input), input), demo: true, note: `${noteFor(e)} 시연 답변으로 대신 보여 드려요.` };

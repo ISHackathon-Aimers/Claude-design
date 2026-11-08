@@ -1,4 +1,4 @@
-import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay } from './logic.js';
+import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday } from './logic.js';
 
 // shortcut: 기록과 그룹은 이 브라우저(localStorage)에만 저장, 그룹 친구는 시연용 가상 사용자. 실제 서비스 전에 로그인·DB로 교체.
 const KEY = 'aimers-v1';
@@ -7,11 +7,11 @@ const esc = (s = '') => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<
 const uid = () => Math.random().toString(36).slice(2, 10);
 const ago = (n) => fromDay(toDay(todayStr()) - n);
 const fmt = (d) => { const [y, m, dd] = d.split('-'); return `${y}.${m}.${dd}`; };
-const FONTS = {
-  pretendard: "'Pretendard Variable', Pretendard, -apple-system, 'Apple SD Gothic Neo', sans-serif",
-  noto: "'Noto Sans KR', sans-serif",
-  gowun: "'Gowun Batang', serif",
-};
+const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
+const fmtW = (d) => `${fmt(d)} (${DAYS[weekday(d)]})`;
+const fmtMD = (d) => `${d.slice(5, 7)}.${d.slice(8)} (${DAYS[weekday(d)]})`;
+const fmtLong = (d) => `${Number(d.slice(5, 7))}월 ${Number(d.slice(8))}일 ${DAYS[weekday(d)]}요일`;
+const dayClass = (d) => ({ 0: ' sun', 6: ' sat' })[weekday(d)] || '';
 
 const ICONS = {
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
@@ -27,6 +27,8 @@ const ICONS = {
   trend: '<path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   sparkle: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
 };
 const icon = (n, s = 20) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -71,7 +73,7 @@ function seed() {
   });
   return {
     v: 1,
-    profile: { name: '김에이머', bio: '정보시스템학과 3학년', photo: '', public: true, periodDays: 7, startDate: start, notify: false, font: 'pretendard', fontScale: 100 },
+    profile: { name: '김에이머', bio: '정보시스템학과 3학년', photo: '', public: true, periodDays: 7, startDate: start, notify: false, theme: 'system', fontScale: 100 },
     categories: ['프로젝트', '대외활동', '동아리', '전공공부'],
     entries: [...rich, ...fillers].sort((a, b) => b.date.localeCompare(a.date)),
     groups: [
@@ -178,14 +180,28 @@ function entryCard(e, owner = true) {
 }
 
 // ───────── 1번 탭: 내 대시보드 ─────────
+// 이번 기간의 날짜 버튼 줄: 날짜를 누르면 그날 기록을 쓴다
+function dayStrip(start, len) {
+  const today = todayStr();
+  const has = new Set(S.entries.map((e) => e.date));
+  const days = Array.from({ length: len }, (_, k) => fromDay(toDay(start) + k));
+  return `<div class="days${len > 7 ? ' scroll' : ''}" role="group" aria-label="날짜를 골라 기록하기">${days.map((d) => {
+    const future = d > today;
+    return `<button type="button" class="day${d === today ? ' today' : ''}${has.has(d) ? ' has' : ''}" data-act="pick-day" data-v="${d}" ${future ? 'disabled' : ''}
+      aria-label="${fmtLong(d)}${d === today ? ', 오늘' : ''}${has.has(d) ? ', 기록 있음' : ''}">
+      <span class="dw${dayClass(d)}">${DAYS[weekday(d)]}</span><span class="dn">${Number(d.slice(8))}</span><span class="dot" aria-hidden="true"></span></button>`;
+  }).join('')}</div><p class="help">날짜를 누르면 그날의 경험을 기록할 수 있어요.</p>`;
+}
+
 function dashboard() {
   const s = myStats();
   const p = S.profile;
   const status = s.current < 0
     ? `<section class="card"><p>${fmt(p.startDate)}부터 첫 기록 기간이 시작돼요.</p><button class="btn secondary block" data-act="record">${icon('plus')} 미리 기록하기</button></section>`
     : `<section class="card status ${s.doneNow ? 'done' : ''}" aria-label="이번 기록 기간">
-      <div class="status-top"><span class="eyebrow">이번 기록 기간</span><span class="dday">${s.doneNow ? '완료' : `D-${s.left}`}</span></div>
-      <p class="range">${fmt(s.ps)} ~ ${fmt(s.pe)}</p>
+      <div class="status-top"><span class="eyebrow">이번 기록 기간 · ${s.ps.slice(0, 4)}년</span><span class="dday">${s.doneNow ? '완료' : `D-${s.left}`}</span></div>
+      <p class="range">${fmtMD(s.ps)} ~ ${fmtMD(s.pe)}</p>
+      ${dayStrip(s.ps, p.periodDays)}
       ${s.doneNow
         ? `<p class="ok">${icon('check', 18)} 이번 기간 기록을 마쳤어요. 남길 경험이 더 있다면 추가해도 좋아요.</p>`
         : s.left <= 2
@@ -230,8 +246,8 @@ function dashboard() {
 }
 
 // ───────── 기록 작성 시트 ─────────
-function openRecord() {
-  ui.rec = { step: 'write', category: S.categories[0] || '기타', date: todayStr(), raw: '', questions: [], answers: [], draft: null, loading: false, error: '' };
+function openRecord(date = todayStr()) {
+  ui.rec = { step: 'write', category: S.categories[0] || '기타', date, raw: '', questions: [], answers: [], draft: null, loading: false, error: '' };
   renderSheet();
   $('#sheet').showModal();
 }
@@ -249,7 +265,8 @@ function renderSheet() {
         <div class="chips wrap">${S.categories.map((c) => `<button type="button" class="chip" data-act="rec-cat" data-v="${esc(c)}" aria-pressed="${r.category === c}">#${esc(c)}</button>`).join('')}</div>
         <form class="inline" data-form="add-cat"><label class="sr-only" for="new-cat">새 카테고리 이름</label><input id="new-cat" name="label" maxlength="15" placeholder="새 카테고리 (예: 인턴)" autocomplete="off"><button class="btn small secondary">추가</button></form>
       </fieldset>
-      <div class="field"><label for="rec-date">날짜</label><input type="date" id="rec-date" data-model="rec.date" value="${r.date}" max="${todayStr()}"></div>
+      <div class="field"><span class="label" id="rec-date-l">날짜</span>
+        <button type="button" class="date-btn" data-act="cal-rec" aria-labelledby="rec-date-l rec-date-v">${icon('calendar')}<span id="rec-date-v">${fmtW(r.date)}</span></button></div>
       <div class="field"><label for="rec-raw">이번 기간에 한 일</label>
         <textarea id="rec-raw" rows="6" maxlength="4000" data-model="rec.raw" placeholder="예: 팀 프로젝트에서 회원가입 화면을 만들었어요.">${esc(r.raw)}</textarea>
         <p class="help">짧게 써도 괜찮아요. 부족한 부분은 AI가 질문으로 채워 드려요.</p></div>${err}`;
@@ -350,9 +367,10 @@ function match() {
     </section>
     ${m.results ? (m.results.length ? `<h2>추천 경험 ${m.results.length}개</h2>${m.results.map((r, i) => {
       const e = S.entries.find((en) => en.id === r.id);
-      return e ? `<article class="card"><span class="eyebrow">추천 ${i + 1} · #${esc(e.category)} · ${fmt(e.date)}</span><h3>${esc(e.title)}</h3><p>${esc(e.summary)}</p>
-        <p class="ai-summary"><strong>추천 이유</strong><br>${esc(r.reason)}</p>${r.angle ? `<p class="tip">${esc(r.angle)}</p>` : ''}</article>` : '';
-    }).join('')}` : '<p class="empty">어울리는 경험을 찾지 못했어요. 문항을 조금 바꿔 보세요.</p>') : ''}`,
+      return e ? `<article class="card"><span class="eyebrow">추천 ${i + 1} · #${esc(e.category)} · ${fmtW(e.date)}</span><h3>${esc(e.title)}</h3>
+        <blockquote class="evidence"><span class="eyebrow">기록 속 근거</span><p>“${esc(r.evidence)}”</p></blockquote>
+        ${r.reason ? `<p class="ai-summary"><strong>추천 이유</strong><br>${esc(r.reason)}</p>` : ''}${r.angle ? `<p class="tip">${esc(r.angle)}</p>` : ''}</article>` : '';
+    }).join('')}` : '<p class="empty">이 문항에 근거로 쓸 만한 기록을 찾지 못했어요.<br>관련 경험을 먼저 기록하거나 문항을 바꿔 보세요.</p>') : ''}`,
   };
 }
 
@@ -482,12 +500,19 @@ function profile() {
       <label class="switch-row" for="pf-public"><span>기록 공개<small>그룹 친구가 내 기록을 볼 수 있어요</small></span><input type="checkbox" role="switch" id="pf-public" data-pf="public" ${p.public ? 'checked' : ''}></label>
       <div class="field"><label for="pf-period">작성 기간</label><select id="pf-period" data-pf="periodDays">
         ${[[7, '매주'], [14, '2주마다'], [30, '한 달마다']].map(([v, l]) => `<option value="${v}" ${p.periodDays === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-      <div class="field"><label for="pf-start">시작 날짜</label><input type="date" id="pf-start" data-pf="startDate" value="${p.startDate}" required></div>
+      <div class="field"><span class="label" id="pf-start-l">시작 날짜</span>
+        <button type="button" class="date-btn" data-act="cal-start" aria-labelledby="pf-start-l pf-start-v">${icon('calendar')}<span id="pf-start-v">${fmtW(p.startDate)}</span></button></div>
       <label class="switch-row" for="pf-notify"><span>마감 알림<small>기간이 끝나기 2일 전부터 앱을 열면 알려 드려요</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''}></label>
     </section>
+    <section class="card"><h2>카테고리</h2>
+      <p class="help">카테고리를 삭제해도 기록은 지워지지 않고 다른 카테고리로 옮겨져요.</p>
+      <ul class="cat-list">${S.categories.map((c) => `<li><span>#${esc(c)}</span><small>${S.entries.filter((e) => e.category === c).length}개</small>
+        <button class="icon-btn" data-act="del-cat" data-v="${esc(c)}" aria-label="${esc(c)} 카테고리 삭제" ${S.categories.length <= 1 ? 'disabled' : ''}>${icon('trash', 18)}</button></li>`).join('')}</ul>
+      <form class="inline" data-form="add-cat"><label class="sr-only" for="new-cat-p">새 카테고리 이름</label><input id="new-cat-p" name="label" maxlength="15" placeholder="새 카테고리 (예: 인턴)" autocomplete="off"><button class="btn small secondary">추가</button></form>
+    </section>
     <section class="card"><h2>화면 설정</h2>
-      <div class="field"><label for="pf-font">글꼴</label><select id="pf-font" data-pf="font">
-        ${[['pretendard', '기본 (프리텐다드)'], ['noto', '본고딕'], ['gowun', '고운바탕']].map(([v, l]) => `<option value="${v}" ${p.font === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><span class="label" id="theme-l">화면 모드</span>
+        <div class="seg full" role="group" aria-labelledby="theme-l">${[['system', '시스템 설정'], ['light', '라이트'], ['dark', '다크']].map(([v, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${(p.theme || 'system') === v}">${l}</button>`).join('')}</div></div>
       <div class="field"><label for="pf-scale">글자 크기 <output id="scale-out">${p.fontScale}%</output></label><input type="range" id="pf-scale" min="90" max="130" step="10" data-pf="fontScale" value="${p.fontScale}"></div>
     </section>
     <button class="btn secondary block" data-act="reset">시연 데이터로 초기화</button>`,
@@ -512,8 +537,42 @@ function resizePhoto(file) {
 }
 
 function applyPrefs() {
-  document.documentElement.style.setProperty('--font', FONTS[S.profile.font] || FONTS.pretendard);
-  document.documentElement.style.fontSize = `${S.profile.fontScale}%`;
+  const root = document.documentElement;
+  const theme = S.profile.theme || 'system';
+  if (theme === 'system') root.removeAttribute('data-theme');
+  else root.dataset.theme = theme;
+  root.style.fontSize = `${S.profile.fontScale}%`;
+}
+
+// ───────── 달력 (기본 날짜 입력 대신 앱 디자인에 맞춘 달력) ─────────
+const cal = { month: '', value: '', max: '', title: '', onPick: null, marks: new Set() };
+function openCalendar({ value, max = '', title, onPick }) {
+  Object.assign(cal, { value, max, title, onPick, month: value.slice(0, 7), marks: new Set(S.entries.map((e) => e.date)) });
+  renderCal();
+  $('#cal').showModal();
+  $('#cal .cal-day[aria-pressed="true"]')?.focus();
+}
+function renderCal() {
+  const [y, m] = cal.month.split('-').map(Number);
+  const first = `${cal.month}-01`;
+  const len = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const today = todayStr();
+  const blanks = Array.from({ length: weekday(first) }, () => '<span aria-hidden="true"></span>');
+  const days = Array.from({ length: len }, (_, k) => {
+    const d = fromDay(toDay(first) + k);
+    const marked = cal.marks.has(d);
+    return `<button type="button" class="cal-day${dayClass(d)}${d === today ? ' today' : ''}${marked ? ' marked' : ''}" data-act="cal-pick" data-v="${d}"
+      aria-pressed="${d === cal.value}" aria-label="${y}년 ${fmtLong(d)}${d === today ? ', 오늘' : ''}${marked ? ', 기록 있음' : ''}" ${cal.max && d > cal.max ? 'disabled' : ''}>${k + 1}</button>`;
+  });
+  $('#cal').innerHTML = `<div class="cal-head"><h2 id="cal-title">${esc(cal.title)}</h2><button class="icon-btn" data-act="cal-close" aria-label="닫기">${icon('x', 22)}</button></div>
+    <div class="cal-nav">
+      <button class="icon-btn" data-act="cal-move" data-v="-1" aria-label="이전 달">${icon('back', 22)}</button>
+      <strong aria-live="polite">${y}년 ${m}월</strong>
+      <button class="icon-btn" data-act="cal-move" data-v="1" aria-label="다음 달" ${cal.max && cal.month >= cal.max.slice(0, 7) ? 'disabled' : ''}>${icon('next', 22)}</button>
+    </div>
+    <div class="cal-grid" role="group" aria-labelledby="cal-title">${DAYS.map((w, i) => `<span class="cal-w${{ 0: ' sun', 6: ' sat' }[i] || ''}" aria-hidden="true">${w}</span>`).join('')}${blanks.join('')}${days.join('')}</div>
+    <div class="cal-foot"><span class="help"><span class="mark" aria-hidden="true"></span> 기록한 날</span>
+      <button class="btn small secondary" data-act="cal-pick" data-v="${today}" ${cal.max && today > cal.max ? 'disabled' : ''}>오늘</button></div>`;
 }
 
 function maybeNotify() {
@@ -559,11 +618,39 @@ function render(scroll = false) {
   document.querySelectorAll('.tabbar a').forEach((a) => (a.dataset.tab === tab ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
   document.title = current.title ? `${current.title} · AIMers` : 'AIMers';
   if (scroll) { window.scrollTo(0, 0); $('#main').focus({ preventScroll: true }); }
+  const strip = $('.days.scroll');
+  const t = strip && $('.day.today', strip);
+  if (t) strip.scrollLeft = t.offsetLeft - strip.clientWidth / 2 + t.clientWidth / 2;
 }
 
 // ───────── 이벤트 ─────────
 const actions = {
-  record: openRecord,
+  record: () => openRecord(),
+  'pick-day': (el) => openRecord(el.dataset.v),
+  'cal-rec': () => openCalendar({ value: ui.rec.date, max: todayStr(), title: '기록 날짜', onPick: (d) => { ui.rec.date = d; renderSheet(); } }),
+  'cal-start': () => openCalendar({ value: S.profile.startDate, title: '기록 시작 날짜', onPick: (d) => { S.profile.startDate = d; save(); render(); toast(`${fmtW(d)}부터 기록 기간을 계산해요.`); } }),
+  'cal-move': (el) => {
+    const [y, m] = cal.month.split('-').map(Number);
+    cal.month = new Date(Date.UTC(y, m - 1 + Number(el.dataset.v), 1)).toISOString().slice(0, 7);
+    renderCal();
+  },
+  'cal-pick': (el) => { $('#cal').close(); cal.onPick?.(el.dataset.v); },
+  'cal-close': () => $('#cal').close(),
+  theme: (el) => { S.profile.theme = el.dataset.v; save(); applyPrefs(); render(); },
+  'del-cat': (el) => {
+    const c = el.dataset.v;
+    const n = S.entries.filter((e) => e.category === c).length;
+    const rest = S.categories.filter((x) => x !== c);
+    const target = c !== '기타' ? '기타' : rest[0];
+    if (!rest.length || !confirm(n ? `'${c}' 카테고리를 삭제할까요?\n이 카테고리의 기록 ${n}개는 '${target}'(으)로 옮겨져요.` : `'${c}' 카테고리를 삭제할까요?`)) return;
+    S.categories = rest;
+    if (n) {
+      if (!S.categories.includes(target)) S.categories.push(target);
+      S.entries.forEach((e) => { if (e.category === c) e.category = target; });
+    }
+    if (ui.cat === c) ui.cat = 'all';
+    save(); render(); toast(`'${c}' 카테고리를 삭제했어요.`);
+  },
   sort: (el) => { ui.sort = el.dataset.v; render(); },
   cat: (el) => { ui.cat = el.dataset.v; render(); },
   'del-entry': (el) => {
@@ -636,7 +723,9 @@ const actions = {
     const m = ui.match;
     if (!m.prompt.trim()) { toast('자기소개서 문항을 입력해 주세요.'); $('#m-prompt').focus(); return; }
     m.loading = true; render();
-    try { m.results = (await ai('match', { prompt: m.prompt, entries: S.entries.slice(0, 80).map(brief) })).matches; } catch (e) { toast(e.message); }
+    // 원문과 꼬리질문 답변까지 보내서 기록 속 문장을 근거로 찾게 한다
+    const withDetail = (e) => ({ ...brief(e), detail: [e.raw, ...(e.qa || []).map((x) => x.a)].filter(Boolean).join('\n').slice(0, 800) });
+    try { m.results = (await ai('match', { prompt: m.prompt, entries: S.entries.slice(0, 60).map(withDetail) })).matches; } catch (e) { toast(e.message); }
     m.loading = false; render();
   },
   'ins-run': async () => {
@@ -672,8 +761,7 @@ const forms = {
     const name = f.elements.label.value.trim().replace(/^#/, '');
     if (!name) return;
     if (!S.categories.includes(name)) { S.categories.push(name); save(); }
-    ui.rec.category = name;
-    renderSheet();
+    if (ui.rec && $('#sheet').open) { ui.rec.category = name; renderSheet(); } else { render(); toast(`'${name}' 카테고리를 추가했어요.`); }
   },
   'new-group': (f) => {
     const name = f.elements.label.value.trim();
@@ -709,9 +797,6 @@ async function setPref(el) {
     }
   } else if (key === 'periodDays' || key === 'fontScale') {
     p[key] = Number(el.value);
-  } else if (key === 'startDate') {
-    if (!el.value) { toast('시작 날짜를 골라 주세요.'); return; }
-    p.startDate = el.value;
   } else {
     p[key] = el.value.trim() || (key === 'name' ? '나' : '');
   }
@@ -735,6 +820,7 @@ document.addEventListener('input', (ev) => {
   if (t.dataset.pf === 'fontScale') { $('#scale-out').textContent = `${t.value}%`; S.profile.fontScale = Number(t.value); applyPrefs(); }
 });
 document.addEventListener('change', (ev) => { if (ev.target.dataset.pf) setPref(ev.target); });
+$('#cal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); }); // 바깥을 누르면 닫기
 $('#sheet').addEventListener('cancel', (ev) => {
   if (ui.rec?.raw.trim() && !confirm('작성 중인 내용이 사라져요. 닫을까요?')) ev.preventDefault();
 });

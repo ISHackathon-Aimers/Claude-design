@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { periodIndex, streakInfo, daysLeft, semesterOf, fireLevel } from './public/logic.js';
+import { periodIndex, streakInfo, daysLeft, semesterOf, fireLevel, weekday } from './public/logic.js';
 
 process.env.AIMERS_DEMO = '1';
-const { runTask } = await import('./ai.js');
+const { runTask, TASKS } = await import('./ai.js');
 const { handle } = await import('./server.js');
 
 test('기록 기간과 연속 기록 계산', () => {
@@ -26,6 +26,7 @@ test('학기 구분과 불타는 단계', () => {
   assert.equal(semesterOf('2026-11-07').label, '2026년 2학기');
   assert.equal(semesterOf('2027-02-10').label, '2026년 2학기');
   assert.deepEqual([9, 10, 19, 20].map(fireLevel), [0, 1, 1, 2]);
+  assert.deepEqual(['2026-11-08', '2026-11-07', '2024-02-29'].map(weekday), [0, 6, 4]); // 일, 토, 목
 });
 
 test('AI 입력 검증', async () => {
@@ -47,14 +48,24 @@ test('시연 모드 꼬리질문과 정리', async () => {
   assert.ok(sum.data.tags.every((t) => ['협업', '커뮤니케이션', '전공 역량', '성실성'].includes(t)));
 });
 
-test('자소서 매칭은 있는 기록 id만 돌려준다', async () => {
+test('자소서 매칭은 기록 속 실제 문장을 근거로 든다', async () => {
   const entries = [
-    { id: 'a', title: '팀 프로젝트', summary: '팀원과 협업해 문제를 해결', tags: ['협업'] },
-    { id: 'b', title: 'SQL 공부', summary: '매일 문제 풀이', tags: ['성실성'] },
+    { id: 'a', title: '팀 프로젝트', summary: '앱 개발 프로젝트', detail: '팀원과 의견이 갈려서 내가 회의를 열어 조율했다.', tags: ['협업'] },
+    { id: 'b', title: 'SQL 공부', summary: '매일 문제 풀이', detail: '방학 동안 120문제를 풀었다.', tags: ['성실성'] },
   ];
-  const r = await runTask('match', { prompt: '협업 경험을 쓰시오', entries });
+  const r = await runTask('match', { prompt: '팀원과의 갈등을 조율한 경험을 쓰시오', entries });
   assert.equal(r.data.matches[0].id, 'a');
-  assert.ok(r.data.matches.every((m) => ['a', 'b'].includes(m.id)));
+  assert.equal(r.data.matches[0].evidence, '팀원과 의견이 갈려서 내가 회의를 열어 조율했다.');
+  assert.ok(r.data.matches.every((m) => m.id !== 'b')); // 근거 문장이 없는 기록은 추천하지 않음
+
+  // AI가 기록에 없는 문장을 근거로 지어내면 버린다 (따옴표·띄어쓰기 차이는 허용)
+  const input = TASKS.match.clean({ prompt: '협업', entries });
+  const out = TASKS.match.normalize({ matches: [
+    { id: 'a', evidence: '“팀원과 의견이 갈려서  내가 회의를 열어 조율했다.”', reason: 'r', angle: 'x' },
+    { id: 'b', evidence: '팀장을 맡아 대회에서 우승했다.', reason: 'r', angle: 'x' },
+    { id: 'zzz', evidence: '방학 동안 120문제를 풀었다.', reason: 'r', angle: 'x' },
+  ] }, input);
+  assert.deepEqual(out.matches.map((m) => m.id), ['a']);
 });
 
 test('서버: 정적 파일, 경로 탈출 차단, API', async () => {

@@ -23,8 +23,11 @@
   --dur: 180ms;
   color-scheme: light dark;
 }
+/* 다크 모드: 시스템 설정을 따르거나(data-theme 없음) 프로필에서 직접 고른다 */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0b0b0f;
     --surface: #16161c;
     --surface-2: #1f1f27;
@@ -43,6 +46,25 @@
     --danger: #f87171;
     --ring: #fb7185;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0b0b0f;
+  --surface: #16161c;
+  --surface-2: #1f1f27;
+  --text: #f2f2f5;
+  --text-2: #a6a8b3;
+  --border: #2c2c36;
+  --primary: #fb7185;
+  --primary-ink: #1a0509;
+  --primary-soft: #3a1520;
+  --accent: #7aa2ff;
+  --accent-soft: #1a2442;
+  --ok: #4ade80;
+  --ok-soft: #10281a;
+  --warn: #fbbf24;
+  --warn-soft: #2e2210;
+  --danger: #f87171;
+  --ring: #fb7185;
 }
 
 * { box-sizing: border-box; }
@@ -304,3 +326,77 @@ input[type="range"] { width: 100%; accent-color: var(--primary); min-height: 44p
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* 기록 기간 날짜 줄 */
+.days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.days.scroll { display: flex; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+.days.scroll::-webkit-scrollbar { display: none; }
+.days.scroll .day { flex: 0 0 44px; scroll-snap-align: center; }
+.day {
+  display: grid; justify-items: center; gap: 2px; padding: 8px 0 6px; min-height: 64px;
+  border: 1px solid transparent; border-radius: 14px; background: var(--surface);
+  transition: background-color var(--dur), border-color var(--dur);
+}
+.day:active { background: var(--surface-2); }
+.day:disabled { opacity: 0.35; cursor: not-allowed; }
+.dw { font-size: 0.75rem; font-weight: 600; color: var(--text-2); }
+.dn { font-size: 1.0625rem; font-weight: 700; line-height: 1.2; }
+.day .dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; }
+.day.has .dot { background: var(--primary); }
+.day.today { border-color: var(--primary); }
+.day.today .dn { color: var(--primary); }
+.sun { color: #e5484d; }
+.sat { color: #3b82f6; }
+
+/* 날짜 선택 버튼 + 달력 */
+.label { font-size: 0.875rem; font-weight: 700; }
+.date-btn {
+  width: 100%; min-height: 48px; padding: 0 14px; display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface); text-align: left; font-size: 1rem;
+}
+.date-btn .ic { color: var(--primary); }
+.cal {
+  border: 0; padding: 0; width: min(360px, calc(100% - 32px)); border-radius: 20px;
+  background: var(--bg); color: var(--text); box-shadow: 0 20px 50px rgb(0 0 0 / 0.3);
+}
+.cal[open] { animation: pop 180ms ease-out; }
+.cal::backdrop { background: rgb(0 0 0 / 0.45); }
+@keyframes pop { from { transform: scale(0.96); opacity: 0.6; } }
+.cal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 8px 0 20px; }
+.cal-nav { display: flex; align-items: center; justify-content: space-between; padding: 4px 12px; }
+.cal-nav strong { font-size: 1.0625rem; }
+.cal-nav .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; padding: 0 12px 8px; }
+.cal-w { text-align: center; font-size: 0.75rem; font-weight: 700; color: var(--text-2); padding: 6px 0; }
+.cal-w.sun { color: #e5484d; }
+.cal-w.sat { color: #3b82f6; }
+.cal-day {
+  position: relative; aspect-ratio: 1; min-height: 44px; border: 0; border-radius: 50%;
+  background: transparent; font-weight: 600; font-size: 0.9375rem; color: var(--text);
+  transition: background-color var(--dur);
+}
+.cal-day.sun { color: #e5484d; }
+.cal-day.sat { color: #3b82f6; }
+.cal-day:hover:not(:disabled) { background: var(--surface-2); }
+.cal-day.today { box-shadow: inset 0 0 0 1.5px var(--primary); }
+.cal-day.marked::after {
+  content: ''; position: absolute; left: 50%; bottom: 5px; width: 4px; height: 4px;
+  border-radius: 50%; background: var(--primary); transform: translateX(-50%);
+}
+.cal-day[aria-pressed="true"] { background: var(--primary); color: var(--primary-ink); }
+.cal-day[aria-pressed="true"]::after { background: var(--primary-ink); }
+.cal-day:disabled { opacity: 0.3; cursor: not-allowed; }
+.cal-foot { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px 16px; border-top: 1px solid var(--border); }
+.cal-foot .mark { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); margin-right: 4px; vertical-align: middle; }
+
+/* 화면 모드 버튼, 카테고리 관리, 자소서 근거 */
+.seg.full { display: grid; grid-template-columns: repeat(3, 1fr); }
+.seg.full button { min-height: 40px; }
+.cat-list { list-style: none; padding: 0; margin: 0; display: grid; }
+.cat-list li { display: flex; align-items: center; gap: 8px; min-height: 48px; border-bottom: 1px solid var(--border); }
+.cat-list li:last-child { border-bottom: 0; }
+.cat-list li span { flex: 1; font-weight: 600; }
+.cat-list li small { color: var(--text-2); font-size: 0.8125rem; }
+.cat-list .icon-btn { color: var(--danger); }
+.cat-list .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.evidence { margin: 0; padding: 10px 14px; border-left: 3px solid var(--primary); background: var(--surface-2); border-radius: 0 12px 12px 0; display: grid; gap: 4px; }

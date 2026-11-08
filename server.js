@@ -70,6 +70,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   http.createServer(handle).listen(port, () => {
     const lan = Object.values(os.networkInterfaces()).flat().find((n) => n?.family === 'IPv4' && !n.internal)?.address;
     console.log(`AIMers 실행 중: http://localhost:${port}${lan ? `  (같은 와이파이의 휴대폰: http://${lan}:${port})` : ''}`);
-    console.log(isDemo() ? '시연 모드: ANTHROPIC_API_KEY가 없어 미리 준비한 답변을 사용합니다.' : 'AI 모드: Claude API에 연결합니다.');
+    console.log(isDemo() ? '시연 모드: DEEPSEEK_API_KEY가 없어 미리 준비한 답변을 사용합니다.' : 'AI 모드: DeepSeek API에 연결합니다.');
   });
 }

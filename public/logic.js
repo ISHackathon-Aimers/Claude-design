@@ -3,6 +3,7 @@ const DAY = 86400000;
 
 export const toDay = (s) => Math.floor(Date.parse(`${s}T00:00:00Z`) / DAY);
 export const fromDay = (n) => new Date(n * DAY).toISOString().slice(0, 10);
+export const weekday = (s) => new Date(toDay(s) * DAY).getUTCDay(); // 0 = 일요일
 
 export function todayStr(now = new Date()) {
   return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);

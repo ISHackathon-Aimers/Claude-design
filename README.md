@@ -15,13 +15,13 @@ npm start
 
 ### AI 연결
 
-`ANTHROPIC_API_KEY`가 없으면 **시연 모드**로 실행되어 미리 준비한 답변을 보여 줍니다. 실제 Claude 응답을 쓰려면 키를 넣고 실행합니다.
+AI는 DeepSeek API(`deepseek-flash` 모델)를 사용합니다. 프로젝트 폴더에 `.env` 파일을 만들고 키를 넣으면 `npm start`가 자동으로 읽습니다.
 
 ```bash
-ANTHROPIC_API_KEY=발급받은_키 npm start
+DEEPSEEK_API_KEY=발급받은_키
 ```
 
-API 키는 서버에서만 사용하며, 코드나 저장소에 올리지 마세요.
+키가 없으면 **시연 모드**로 실행되어 미리 준비한 답변을 보여 줍니다. `.env`는 `.gitignore`에 들어 있어 저장소에 올라가지 않습니다. 키는 서버에서만 사용하며, 코드에 직접 쓰지 마세요.
 
 ### 테스트
 
