@@ -4,6 +4,7 @@ import { pwa } from './pwa.js';
 import { createSaveFeedback, loadingMarkup } from './feedback.js';
 import { PLANS, PREMIUM_TASKS, hasPremium } from './plans.js';
 import { payments } from './payments.js';
+import { defaultAvatar } from './avatars.js';
 pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
@@ -370,9 +371,11 @@ function memberStatus(m) {
   return { done: periodIndex(m.lastEntryDate, m.startDate, days) === cur, streak: m.streak, left, days };
 }
 const me = () => ({ id: 'me', me: true, name: S.profile.name, color: '#e11d48', photo: S.profile.photo, public: S.profile.public });
-// 이름 첫 글자: Google 이름 앞에 붙는 보이지 않는 문자(소프트 하이픈 등)는 건너뛴다
-const initial = (name = '') => [...name.replace(/[\s\u00ad\u200b-\u200f\u2060\ufeff]/g, '')][0] || '?';
-const avatar = (m) => `<span class="avatar" style="background:${esc(m.color)}">${m.photo ? `<img src="${m.photo}" alt="">` : esc(initial(m.name))}</span>`;
+const avatar = (m) => {
+  // Match the signed-in user's UUID to the ID used in other members' group views.
+  const generated = defaultAvatar(m.me ? auth.user?.id || 'aimers-demo-self' : m.id);
+  return `<span class="avatar" style="background:${generated.background}"><img src="${esc(m.photo || generated.src)}" alt="" width="96" height="96" decoding="async"></span>`;
+};
 // 연속 기록이 10회·20회를 넘으면 프로필에 불꽃 테두리와 연속 횟수 배지가 붙는다
 function fireRing(m, streak, cls = '') {
   const lvl = fireLevel(streak);

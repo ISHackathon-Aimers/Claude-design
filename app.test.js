@@ -6,6 +6,7 @@ import { defaultProfile, validateState } from './db.js';
 import { sessionManager } from './public/session.js';
 import { pwa } from './public/pwa.js';
 import { payments } from './public/payments.js';
+import { defaultAvatar } from './public/avatars.js';
 
 let moduleId = 0;
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -13,7 +14,7 @@ async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); }
   assert.fail('UI did not reach the expected state');
 }
-async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false, plan = 'free', failMembership = false, initialRoute = 'profile', pauseMembership = false, failAiHistory = false, enableCheckout = false, confirmStatus = 'PAID', paymentReturn = false } = {}) {
+async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false, plan = 'free', failMembership = false, initialRoute = 'profile', pauseMembership = false, failAiHistory = false, photo = '', enableCheckout = false, confirmStatus = 'PAID', paymentReturn = false } = {}) {
   const html = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
   const paymentId = 'aimers-00000000-0000-4000-8000-000000000001';
   const dom = new JSDOM(html, { url: `http://localhost:3000/${paymentReturn ? `?payment_return=1&paymentId=${paymentId}` : ''}#/${initialRoute}` });
@@ -31,6 +32,7 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
   };
   dom.window.scrollTo = () => {};
   let state = { v: 1, profile: defaultProfile('DB User'), entries: [], categories: ['프로젝트'], lastNotified: '', groups: [], pokes: {}, notifications: [] };
+  state.profile.photo = photo;
   let revision = 0;
   let failSave = false;
   let stale = false;
@@ -99,6 +101,30 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     pauseNextSave: () => { let release; pause = new Promise((resolve) => { release = resolve; }); return () => release(); },
   };
 }
+
+test('UI: account avatars use the real UUID consistently and do not change after renaming', async (t) => {
+  const a = await app(t);
+  const expected = defaultAvatar('internal-id');
+  assert.equal(document.querySelector('.profile-top .avatar img').getAttribute('src'), expected.src);
+  assert.equal(document.querySelector('.profile-top .avatar').textContent, '');
+  assert.equal(a.state.profile.photo, '');
+  a.changeName('New nickname');
+  await until(() => a.writes.length === 1);
+  window.dispatchEvent(new a.dom.window.HashChangeEvent('hashchange'));
+  assert.equal(document.querySelector('.profile-top .avatar img').getAttribute('src'), expected.src);
+  location.hash = '#/dashboard';
+  await until(() => document.querySelector('.top-avatar img'));
+  assert.equal(document.querySelector('.top-avatar img').getAttribute('src'), expected.src);
+});
+
+test('UI: uploaded photos take precedence over generated Gaze characters', async (t) => {
+  const photo = 'data:image/png;base64,iVBORw0KGgo=';
+  await app(t, { photo });
+  assert.equal(document.querySelector('.profile-top .avatar img').getAttribute('src'), photo);
+  location.hash = '#/dashboard';
+  await until(() => document.querySelector('.top-avatar img'));
+  assert.equal(document.querySelector('.top-avatar img').getAttribute('src'), photo);
+});
 
 test('UI: dashboard renders without membership or history requests, and paid routes wait safely for one deduplicated lookup', { timeout: 30000 }, async (t) => {
   const a = await app(t, { initialRoute: 'dashboard', pauseMembership: true, plan: 'annual' });
