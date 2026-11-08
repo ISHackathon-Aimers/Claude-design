@@ -115,12 +115,12 @@ test('UI: device notification controls enable reminders and preserve a visible e
 test('UI: loads the DB profile and queues overlapping edits with current revisions', async (t) => {
   const a = await app(t);
   assert.equal(document.querySelector('#pf-name').value, 'DB User');
-  assert.match(document.querySelector('#save-status').textContent, /서버에 저장됨/);
+  assert.equal(document.querySelector('#save-status').textContent, '');
   const release = a.pauseNextSave();
   a.changeName('First edit');
   a.changeName('Second edit');
   release();
-  await until(() => a.writes.length === 2 && /서버에 저장됨/.test(document.querySelector('#save-status').textContent));
+  await until(() => a.writes.length === 2 && /저장했어요/.test(document.querySelector('#save-status').textContent));
   assert.deepEqual(a.writes.map((w) => w.revision), [0, 1]);
   assert.equal(a.state.profile.name, 'Second edit');
   assert.equal(localStorage.length, 0);

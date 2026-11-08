@@ -1,6 +1,7 @@
 import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday, matchEntry } from './logic.js';
 import { sessionManager } from './session.js';
 import { pwa } from './pwa.js';
+import { createSaveFeedback, loadingMarkup } from './feedback.js';
 pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
@@ -42,6 +43,7 @@ const ICONS = {
 };
 const icon = (n, s = 20) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 const spinner = '<span class="spinner" aria-hidden="true"></span>';
+const saveFeedback = createSaveFeedback($('#save-status'));
 
 // ───────── 시연 데이터 ─────────
 function seed() {
@@ -132,13 +134,10 @@ async function api(url, { method = 'GET', body } = {}) {
 }
 
 function renderSync() {
-  const el = $('#save-status');
-  if (!el) return;
-  el.innerHTML = sync.error ? `<p class="error">${esc(sync.error)}</p><div class="inline">
-    <button class="btn small secondary" data-act="export-data">변경 내용 내보내기</button>
-    ${sync.conflict ? '<button class="btn small secondary" data-act="reload-data">서버 내용 다시 불러오기</button>' : '<button class="btn small secondary" data-act="retry-save">저장 재시도</button>'}</div>`
-    : auth.user ? (sync.saving || sync.pending ? '서버에 저장 중...' : sync.ready ? '서버에 저장됨' : '')
-    : '시연 화면입니다. 기록을 저장하려면 로그인해 주세요.';
+  if (sync.saving) saveFeedback.update('saving');
+  else if (sync.error) saveFeedback.update(sync.conflict ? 'conflict' : 'error', sync.error);
+  else if (sync.pending) saveFeedback.update('saving');
+  else saveFeedback.update('idle');
 }
 
 function save() {
@@ -455,20 +454,20 @@ function renderSheet() {
       <div class="field"><label for="e-raw">원문</label><textarea id="e-raw" rows="5" maxlength="4000" data-model="rec.raw">${esc(r.raw)}</textarea>
         <p class="help">원문을 고쳐도 AI 요약은 다시 만들지 않아요. 요약도 함께 고쳐 주세요.</p></div>${err}`;
     foot = `<button class="btn secondary" data-act="close-sheet" ${r.loading ? 'disabled' : ''}>취소</button>
-      <button class="btn primary" data-act="edit-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 수정 완료`}</button>`;
+      <button class="btn primary" data-act="edit-save" aria-busy="${r.loading}" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장하고 있어요` : `${icon('check')} 수정 완료`}</button>`;
   } else if (r.step === 'write') {
     body = `<p class="step">1 / 3 · 경험 쓰기</p>
 ${catDateFields(r)}
       <div class="field"><label for="rec-raw">이번 기간에 한 일</label>
         <textarea id="rec-raw" rows="6" maxlength="4000" data-model="rec.raw" placeholder="예: 팀 프로젝트에서 회원가입 화면을 만들었어요.">${esc(r.raw)}</textarea>
         <p class="help">짧게 써도 괜찮아요. 부족한 부분은 AI가 질문으로 채워 드려요.</p></div>${err}`;
-    foot = `<button class="btn primary" data-act="rec-next" ${r.loading ? 'disabled' : ''}>${busy('AI가 읽는 중…') || '다음'}</button>`;
+    foot = `<button class="btn primary" data-act="rec-next" aria-busy="${r.loading}" ${r.loading ? 'disabled' : ''}>${busy('경험을 살펴보고 있어요') || '다음'}</button>`;
   } else if (r.step === 'ask') {
     body = `<p class="step">2 / 3 · AI 꼬리질문</p>
       <p class="help">조금만 더 알려 주시면 나중에 자소서와 면접에 바로 쓸 수 있어요. 기억나지 않는 질문은 비워 두셔도 돼요.</p>
       ${r.questions.map((q, i) => `<div class="field"><label class="ai-q" for="qa-${i}">${esc(q)}</label><textarea id="qa-${i}" rows="3" maxlength="1000" data-model="rec.answers.${i}">${esc(r.answers[i] || '')}</textarea></div>`).join('')}${err}`;
     foot = `<button class="btn secondary" data-act="rec-back" ${r.loading ? 'disabled' : ''}>이전</button>
-      <button class="btn primary" data-act="rec-summarize" ${r.loading ? 'disabled' : ''}>${busy('정리하는 중…') || 'AI로 정리하기'}</button>`;
+      <button class="btn primary" data-act="rec-summarize" aria-busy="${r.loading}" ${r.loading ? 'disabled' : ''}>${busy('정리하고 있어요') || 'AI로 정리하기'}</button>`;
   } else {
     const d = r.draft;
     body = `<p class="step">3 / 3 · 정리 확인</p>
@@ -476,7 +475,7 @@ ${catDateFields(r)}
       <div class="field"><label for="d-title">제목</label><input id="d-title" maxlength="60" data-model="rec.draft.title" value="${esc(d.title)}"></div>
       <div class="field"><label for="d-summary">요약</label><textarea id="d-summary" rows="5" maxlength="600" data-model="rec.draft.summary">${esc(d.summary)}</textarea></div>
       ${d.tags.length ? `<div class="field"><span class="eyebrow">드러난 역량</span><ul class="tags">${d.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}${err}`;
-    foot = `<button class="btn secondary" data-act="rec-back" ${r.loading ? 'disabled' : ''}>이전</button><button class="btn primary" data-act="rec-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 저장하기`}</button>`;
+    foot = `<button class="btn secondary" data-act="rec-back" ${r.loading ? 'disabled' : ''}>이전</button><button class="btn primary" data-act="rec-save" aria-busy="${r.loading}" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장하고 있어요` : `${icon('check')} 저장하기`}</button>`;
   }
   $('#sheet').innerHTML = `${head(r.step === 'edit' ? '기록 수정하기' : '경험 기록하기')}<div class="sheet-body">${body}</div><footer class="sheet-foot">${foot}</footer>`;
 }
@@ -543,7 +542,7 @@ function interview() {
       <p class="help">AI가 항목별로 정리한 기록에서 면접 질문을 만들어요.</p>
       <span class="group-label">카테고리</span><div class="chips wrap">${cats.map(chip).join('')}</div>
       ${tags.length ? `<span class="group-label">역량</span><div class="chips wrap">${tags.map(chip).join('')}</div>` : ''}
-      <button class="btn primary block" data-act="iv-make" ${!iv.theme || iv.loading ? 'disabled' : ''}>${iv.loading === 'q' ? `${spinner} 질문 만드는 중…` : `${icon('sparkle')} 질문 만들기`}</button>
+      <button class="btn primary block" data-act="iv-make" aria-busy="${iv.loading === 'q'}" ${!iv.theme || iv.loading ? 'disabled' : ''}>${iv.loading === 'q' ? `${spinner} 질문을 준비하고 있어요` : `${icon('sparkle')} 질문 만들기`}</button>
     </section>
     ${iv.questions.length ? `<section style="display:grid;gap:8px"><h2>예상 질문</h2><ul class="q-list">${iv.questions.map((x, i) => {
       const e = S.entries.find((en) => en.id === x.entry_id);
@@ -553,7 +552,7 @@ function interview() {
       <h2>답변 연습</h2><p class="ai-q">${esc(q.question)}</p>
       ${src ? `<details><summary>내 기록 다시 보기</summary><div class="raw"><p><strong>${esc(src.title)}</strong></p><p>${esc(src.summary)}</p></div></details>` : ''}
       <div class="field"><label for="iv-answer">내 답변</label><textarea id="iv-answer" rows="6" maxlength="3000" data-model="interview.answer" placeholder="실제 면접처럼 말하듯이 써 보세요.">${esc(iv.answer)}</textarea></div>
-      <button class="btn primary block" data-act="iv-eval" ${iv.loading ? 'disabled' : ''}>${iv.loading === 'e' ? `${spinner} 평가하는 중…` : '답변 평가 받기'}</button>
+      <button class="btn primary block" data-act="iv-eval" aria-busy="${iv.loading === 'e'}" ${iv.loading ? 'disabled' : ''}>${iv.loading === 'e' ? `${spinner} 답변을 살펴보고 있어요` : '답변 평가 받기'}</button>
     </section>` : ''}
     ${fb ? `<section class="card feedback" aria-live="polite">
       <h2>피드백</h2><p>${esc(fb.overall)}</p>
@@ -572,7 +571,7 @@ function match() {
     html: needEntries() || `<section class="card">
       <div class="field"><label for="m-prompt">자기소개서 문항</label>
       <textarea id="m-prompt" rows="4" maxlength="500" data-model="match.prompt" placeholder="예: 팀원과 협력하여 어려운 문제를 해결한 경험을 서술하시오.">${esc(m.prompt)}</textarea></div>
-      <button class="btn primary block" data-act="m-run" ${m.loading ? 'disabled' : ''}>${m.loading ? `${spinner} 찾는 중…` : `${icon('search')} 어울리는 경험 찾기`}</button>
+      <button class="btn primary block" data-act="m-run" aria-busy="${m.loading}" ${m.loading ? 'disabled' : ''}>${m.loading ? `${spinner} 어울리는 경험을 찾고 있어요` : `${icon('search')} 어울리는 경험 찾기`}</button>
     </section>
     ${m.results ? (m.results.length ? `<h2>추천 경험 ${m.results.length}개</h2>${m.results.map((r, i) => {
       const e = S.entries.find((en) => en.id === r.id);
@@ -663,7 +662,7 @@ function insight() {
     title: '성장 인사이트', back: '#/services',
     html: needEntries() || `${radarCard(sems)}<section class="card"><h2>나의 대학생활 연대기</h2>
       <p class="help">${sems.length}개 학기 동안 ${S.entries.length}개의 경험을 기록했어요.</p>
-      <button class="btn primary block" data-act="ins-run" ${ui.insight.loading ? 'disabled' : ''}>${ui.insight.loading ? `${spinner} 분석하는 중…` : `${icon('sparkle')} AI 성장 보고서 받기`}</button></section>
+      <button class="btn primary block" data-act="ins-run" aria-busy="${ui.insight.loading}" ${ui.insight.loading ? 'disabled' : ''}>${ui.insight.loading ? `${spinner} 성장 보고서를 준비하고 있어요` : `${icon('sparkle')} AI 성장 보고서 받기`}</button></section>
     ${d ? `<section class="card" aria-live="polite"><h2>달라진 점</h2><ul style="margin:0;padding-left:20px;display:grid;gap:6px">${d.growth.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>${d.next_step ? `<p class="tip">${esc(d.next_step)}</p>` : ''}</section>` : ''}
     <div class="timeline">${sems.slice().reverse().map((s) => {
       const tags = count(s.entries.flatMap((e) => e.tags || [])).slice(0, 3);
@@ -1318,7 +1317,8 @@ $('#sheet').addEventListener('cancel', (ev) => { ev.preventDefault(); closeSheet
 window.addEventListener('hashchange', () => render(true));
 
 async function initAuth() {
-  $('#main').innerHTML = '<p class="help" role="status">계정을 확인하고 있어요.</p>';
+  $('#topbar').innerHTML = '<h1 class="logo">AIM<b>ers</b></h1>';
+  $('#main').innerHTML = loadingMarkup('내 공간을 준비하고 있어요', '로그인 정보를 확인하고 있어요.');
   try {
     const session = await sessionManager.initialize();
     auth.enabled = session.enabled;
@@ -1350,6 +1350,7 @@ async function initAuth() {
   history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
   if (auth.user) {
     try {
+      $('#main').innerHTML = loadingMarkup('기록을 불러오고 있어요', '지난 경험과 설정을 가져오는 중이에요.');
       await refreshData();
       aiRuns = (await api('/api/ai/history')).runs;
       try {
