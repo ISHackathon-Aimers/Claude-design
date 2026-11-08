@@ -1,5 +1,6 @@
 import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday, matchEntry } from './logic.js';
 import { sessionManager } from './session.js';
+import { preparePush, enablePush, disablePush, pushSupport } from './push.js';
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
@@ -680,7 +681,9 @@ function insight() {
 }
 
 // ───────── 3번 탭: 내 그룹 ─────────
-const pokeKey = (g, m) => `${g.id}:${m.id}:${periodIndex(todayStr(), m.startDate, m.periodDays)}`;
+const pokeKey = (g, m) => `${g.id}:${m.id}`;
+const pokeCooldown = 5 * 60 * 1000;
+let pokeTimer;
 function groupMembers(g) { return [me(), ...g.members]; }
 
 function groups() {
@@ -704,6 +707,9 @@ function groups() {
 }
 
 function groupDetail(g) {
+  clearTimeout(pokeTimer);
+  const remaining = g.members.map((m) => Number(S.pokes[pokeKey(g, m)]) + pokeCooldown - Date.now()).filter((ms) => ms > 0);
+  if (remaining.length) pokeTimer = setTimeout(() => render(), Math.min(...remaining) + 50);
   const ms = groupMembers(g);
   const done = ms.filter((m) => memberStatus(m).done).length;
   return {
@@ -712,13 +718,13 @@ function groupDetail(g) {
       <div class="group-head"><span class="eyebrow">각자의 이번 기록 기간</span><button class="chip" data-act="copy" data-v="${esc(g.code)}">${icon('copy', 16)} 초대 코드 ${esc(g.code)}</button></div>
       <p><strong>${ms.length}명 중 ${done}명</strong>이 자기 기간의 기록을 마쳤어요.</p>
       <div class="bar" role="img" aria-label="${ms.length}명 중 ${done}명 완료"><span style="width:${(done / ms.length) * 100}%"></span></div>
-      <p class="help">멤버마다 기록 주기와 시작일이 달라요. 자기 기간 안에 아직 기록하지 않은 멤버만 콕 찌를 수 있어요.</p>
+      <p class="help">멤버마다 기록 주기와 시작일이 달라요. 자기 기간 안에 아직 기록하지 않은 멤버만 콕 찌를 수 있어요. 같은 멤버에게는 5분 뒤 다시 보낼 수 있어요.</p>
       <p class="help">${auth.user ? '친구에게 초대 코드를 공유하면 같은 그룹에 참여할 수 있어요.' : '시연용 그룹입니다.'}</p>
       ${auth.user ? `<button class="btn secondary" data-act="leave-group" data-v="${g.id}">그룹 나가기</button>` : ''}
     </section>
     <section class="card"><h2>멤버</h2><ul class="members">${ms.map((m) => {
       const st = memberStatus(m);
-      const poked = !m.me && S.pokes[pokeKey(g, m)];
+      const poked = !m.me && Date.now() - Number(S.pokes[pokeKey(g, m)]) < pokeCooldown;
       return `<li class="member">
         <a class="member-link" href="${m.me ? '#/profile' : `#/groups/${g.id}/m/${m.id}`}">
           ${fireRing(m, st.streak)}
@@ -793,7 +799,11 @@ function profile() {
         <p class="help">${periodName(p.periodDays)} 한 번씩 기록해요. 이번 기간: ${fmtMD(s.ps)} ~ ${fmtMD(s.pe)}</p></div>
       <div class="field"><span class="label" id="pf-start-l">시작 날짜</span>
         <button type="button" class="date-btn" data-act="cal-start" aria-labelledby="pf-start-l pf-start-v">${icon('calendar')}<span id="pf-start-v">${fmtW(p.startDate)}</span></button></div>
-      <label class="switch-row" for="pf-notify"><span>마감 알림<small>기간이 끝나기 2일 전부터 앱을 열면 알려 드려요</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''}></label>
+      <label class="switch-row" for="pf-notify"><span>매일 기록 알림<small>매일 오전 9시경 알려 드려요. 한국 시간 기준입니다.</small></span><input type="checkbox" role="switch" id="pf-notify" data-pf="notify" ${p.notify ? 'checked' : ''}></label>
+      <p class="help">콕 찌르기는 받은 직후 알려 드려요. 알림 소리는 기기의 알림 설정과 무음 모드에 따라 재생돼요.</p>
+      ${pushSupport() ? `<p class="help">${esc(pushSupport())}</p>` : ''}
+      <div class="inline"><button class="btn secondary" data-act="enable-push">이 기기에서 알림 켜기</button><button class="btn secondary" data-act="test-push">테스트 알림</button></div>
+      <button class="btn secondary block" data-act="disable-push">이 기기에서 알림 끄기</button>
     </section>
     <section class="card"><h2>카테고리</h2>
       <p class="help">카테고리를 삭제해도 기록은 지워지지 않고 다른 카테고리로 옮겨져요.</p>
@@ -903,14 +913,7 @@ function renderCal() {
 }
 
 function maybeNotify() {
-  const s = myStats();
-  const today = todayStr();
-  if (!S.profile.notify || s.doneNow || s.current < 0 || s.left > 2 || S.lastNotified === today) return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  // shortcut: 앱을 열었을 때만 알림. 앱을 닫아도 오는 알림은 서비스 워커 + 푸시 서버가 필요.
-  new Notification('AIMers', { body: `기록 마감까지 ${s.left === 0 ? '오늘 하루' : `${s.left}일`} 남았어요. 이번 기간 경험을 남겨 주세요.`, icon: 'icon.svg' });
-  S.lastNotified = today;
-  save();
+  // Scheduled reminders are sent by the server, including while the app is closed.
 }
 
 // ───────── 라우팅 & 렌더링 ─────────
@@ -952,6 +955,7 @@ function centerIn(box, el) {
   box.scrollLeft += r.left - b.left - (b.width - r.width) / 2;
 }
 function render(scroll = false) {
+  clearTimeout(pokeTimer);
   if (auth.loading || (auth.user && !sync.ready)) return;
   current = view();
   renderTop();
@@ -1003,6 +1007,7 @@ const actions = {
     auth.busy = true; auth.error = ''; render();
     try {
       if (!await flushSave()) throw new Error('변경 내용을 먼저 저장해 주세요.');
+      await disablePush(api);
       await sessionManager.signOut();
       location.assign('/?auth=logout#/profile');
     } catch (e) {
@@ -1166,6 +1171,7 @@ const actions = {
     const g = S.groups.find((x) => x.id === el.dataset.g);
     const m = g?.members.find((x) => x.id === el.dataset.v);
     if (!m) return;
+    if (Date.now() - Number(S.pokes[pokeKey(g, m)]) < pokeCooldown) return;
     if (auth.user) {
       try {
         await api(`/api/groups/${g.id}/pokes`, { method: 'POST', body: { recipientId: m.id } });
@@ -1173,9 +1179,32 @@ const actions = {
       } catch (e) { toast(e.message); }
       return;
     }
-    S.pokes[pokeKey(g, m)] = todayStr();
+    S.pokes[pokeKey(g, m)] = Date.now();
     save(); render();
     toast('시연 화면에서 콕 찌르기를 표시했어요.');
+  },
+  'enable-push': async (el) => {
+    if (!auth.user) { toast('로그인한 뒤 알림을 켜 주세요.'); return; }
+    el.disabled = true;
+    try { await enablePush(api); S.profile.notify = true; save(); render(); toast('매일 알림과 콕 찌르기 알림을 켰어요.'); }
+    catch (e) { toast(e.message); }
+    finally { el.disabled = false; }
+  },
+  'disable-push': async (el) => {
+    if (!auth.user) return;
+    el.disabled = true;
+    try { await disablePush(api); toast('이 기기의 푸시 알림을 껐어요.'); }
+    catch (e) { toast(e.message); }
+    finally { el.disabled = false; }
+  },
+  'test-push': async (el) => {
+    if (!auth.user) { toast('로그인한 뒤 알림을 켜 주세요.'); return; }
+    el.disabled = true;
+    try {
+      const result = await api('/api/push/test', { method: 'POST' });
+      toast(result.sent ? '테스트 알림을 전송했어요. 기기의 알림을 확인해 주세요.' : '전송을 완료하지 못했어요. 잠시 후 다시 시도해 주세요.');
+    } catch (e) { toast(e.message); }
+    finally { el.disabled = false; }
   },
   'read-notifications': async () => {
     try { await api('/api/notifications/read', { method: 'POST' }); await refreshData(); render(); } catch (e) { toast(e.message); }
@@ -1243,9 +1272,8 @@ async function setPref(el) {
   } else if (key === 'public' || key === 'notify') {
     p[key] = el.checked;
     if (key === 'notify' && el.checked) {
-      if (!('Notification' in window)) { toast('이 브라우저는 알림을 지원하지 않아요.'); p.notify = false; }
-      else if ((await Notification.requestPermission()) !== 'granted') { toast('브라우저 알림이 꺼져 있어요. 설정에서 허용해 주세요.'); p.notify = false; }
-      else toast('마감 2일 전부터 알려 드릴게요.');
+      try { await enablePush(api); toast('매일 오전 9시경 기록 알림을 보내 드릴게요.'); }
+      catch (e) { toast(e.message); p.notify = false; }
     }
   } else if (key === 'periodDays' || key === 'fontScale') {
     p[key] = Number(el.value);
@@ -1325,6 +1353,7 @@ async function initAuth() {
   } else S = seed();
   auth.loading = false;
   applyPrefs(); render(); maybeNotify();
+  if (auth.user) preparePush(api).catch(() => {});
   if (success && auth.user) toast(`${auth.user.name}님, 로그인했어요.`);
 }
 

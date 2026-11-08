@@ -22,6 +22,8 @@ export class SupabaseStore {
         NOT_MEMBER: [403, '그룹에 접근할 수 없습니다.'], NOT_FOUND: [404, '초대 코드를 확인해 주세요.'],
         GROUP_LIMIT: [400, '참여 가능한 그룹 또는 멤버 수를 초과했습니다.'],
         POKE_UNAVAILABLE: [400, '현재 기록을 독촉할 수 없는 멤버입니다.'], INVALID_INPUT: [400, '입력 내용을 확인해 주세요.'],
+        PUSH_NOT_SUBSCRIBED: [400, '먼저 이 기기에서 알림 켜기를 눌러 주세요.'],
+        PUSH_RATE_LIMIT: [429, '테스트 알림은 1분 뒤 다시 보낼 수 있어요.'],
       };
       const code = Object.keys(known).find((key) => error.message?.includes(key));
       if (code) fail(known[code][1], known[code][0]);

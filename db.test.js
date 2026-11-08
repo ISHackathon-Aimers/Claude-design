@@ -101,6 +101,14 @@ test('DB: poke delivery, duplicate protection, recipient-only read and completed
   assert.equal(db.state(b.id).state.notifications.length, 1);
   db.readNotifications(b.id);
   assert.equal(db.state(b.id).state.notifications.length, 0);
+  const sentAt = db.state(a.id).state.pokes[`${g.id}:${b.id}`];
+  const clock = t.mock.method(Date, 'now', () => sentAt + 299999);
+  db.poke(a.id, g.id, b.id);
+  assert.equal(db.state(b.id).state.notifications.length, 0);
+  clock.mock.mockImplementation(() => sentAt + 300000);
+  db.poke(a.id, g.id, b.id);
+  assert.equal(db.state(b.id).state.notifications.length, 1);
+  clock.mock.restore();
   const bstate = db.state(b.id);
   bstate.state.entries = [entry()];
   db.saveState(b.id, bstate.state, bstate.revision);

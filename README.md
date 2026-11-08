@@ -53,8 +53,13 @@ Google OAuth가 Internal이면 해당 Google 조직의 계정만 로그인할 �
 | `SUPABASE_PUBLISHABLE_KEY` | Config | 브라우저 공개용 publishable 키 |
 | `DEEPSEEK_API_KEY` | Secret | 실제 AI를 사용할 때 등록하는 서버 전용 키 |
 | `AIMERS_DEMO` | Config | `1`은 준비된 AI 답변, `0`은 실제 AI 사용 |
+| `SUPABASE_SERVICE_ROLE_KEY` | Secret | 푸시 전송 전용 서버 관리자 키 |
+| `VAPID_PUBLIC_KEY` | Config | 웹 푸시 공개 키 |
+| `VAPID_PRIVATE_KEY` | Secret | 웹 푸시 비공개 키 |
+| `VAPID_SUBJECT` | Config | 운영자 연락처. 예: `mailto:admin@example.com` |
+| `CRON_SECRET` | Secret | 예약 API 인증에 쓰는 충분히 긴 임의 문자열 |
 
-이전 anon 키는 `SUPABASE_ANON_KEY`로도 사용할 수 있습니다. secret 키나 service_role 키는 사용하지 않습니다. 비로그인 시연 화면은 조회할 수 있지만, main과 동일하게 기록 변경, AI 기능, 그룹 기능에는 로그인이 필요합니다. 서버는 매 요청의 Supabase 액세스 토큰을 검증하고 클라이언트 계정 ID와 비교합니다.
+이전 anon 키는 `SUPABASE_ANON_KEY`로도 사용할 수 있습니다. 로그인과 개인 기록 처리는 공개 키와 사용자 토큰을 사용합니다. `SUPABASE_SERVICE_ROLE_KEY`는 서버의 푸시 전송 처리에만 사용하며 브라우저에 반환하지 않습니다. 비로그인 시연 화면은 조회할 수 있지만 기록 변경, AI 기능, 그룹 기능에는 로그인이 필요합니다. 서버는 매 요청의 Supabase 액세스 토큰을 검증하고 클라이언트 계정 ID와 비교합니다.
 
 ### DB 마이그레이션
 
@@ -62,15 +67,35 @@ Google OAuth가 Internal이면 해당 Google 조직의 계정만 로그인할 �
 
 1. `supabase/migrations/202611080001_user_states.sql`
 2. `supabase/migrations/202611080002_main_features.sql`
+3. `supabase/migrations/202611080003_poke_cooldown.sql`
+4. `supabase/migrations/202611080004_web_push.sql`
 
-첫 번째 파일을 이미 적용한 기존 시연 서버는 두 번째 파일만 추가로 실행한 뒤 새 코드를 배포합니다. 두 번째 마이그레이션은 기존 `user_states`와 개인 기록을 삭제하거나 교체하지 않습니다. 새 코드가 사용하는 그룹, 알림, AI 이력 테이블과 함수를 추가합니다. SQL 파일 전체가 한 트랜잭션이므로 실패하면 오류를 해결한 뒤 다시 실행합니다.
+기존 서버에는 아직 적용하지 않은 파일만 번호 순서대로 실행한 뒤 새 코드를 배포합니다. 기존 `user_states`와 개인 기록을 삭제하거나 교체하지 않습니다. 각 SQL 파일은 한 트랜잭션이므로 실패하면 오류를 해결한 뒤 다시 실행합니다.
+
+### 웹 푸시 설정
+
+1. `npx web-push generate-vapid-keys --json`으로 키 한 쌍을 생성합니다. 공개 키와 비공개 키를 위 환경 변수에 각각 등록합니다. 키를 바꾸면 기기에서 알림을 다시 켜야 합니다.
+2. Supabase 프로젝트의 서버 전용 `service_role` 키를 `SUPABASE_SERVICE_ROLE_KEY`에 등록하고, 운영자 연락처와 예약 API 인증 문자열을 설정합니다. 이 값들은 저장소에 커밋하지 않습니다.
+3. 세 번째와 네 번째 마이그레이션을 적용하고 Vercel에 배포합니다. `vercel.json`은 매일 UTC 00시, 한국 시간 오전 9시에 `/api/cron/push`를 호출합니다. Vercel은 `CRON_SECRET`을 Bearer 인증으로 보냅니다. Hobby 요금제에서는 지정된 시간부터 1시간 안에 실행될 수 있습니다.
+4. 아이폰은 iOS 16.4 이상에서 Safari로 열고 공유 메뉴의 "홈 화면에 추가"를 선택합니다. 홈 화면 아이콘으로 실행하고 로그인한 뒤 프로필의 "이 기기에서 알림 켜기"를 누르고 권한을 허용합니다. "테스트 알림"으로 확인합니다.
+
+알림을 켜면 매일 기록 알림도 활성화합니다. 매일 알림을 꺼도 콕 찌르기 알림은 유지됩니다. "이 기기에서 알림 끄기"와 로그아웃은 해당 기기의 구독을 해제합니다. 다른 기기의 구독은 유지됩니다. 콕 찌르기는 같은 그룹의 같은 사람에게 마지막 전송 후 5분이 지나야 다시 보낼 수 있습니다.
+
+알림 소리는 운영체제 기본 설정을 따릅니다. 아이폰의 설정에서 알림, AIMers, 알림 허용과 사운드를 켜야 합니다. 무음 모드나 집중 모드에서는 소리가 나지 않을 수 있으며 웹앱이 이를 강제로 변경하거나 사용자 지정 알림음을 지정할 수 없습니다.
+
+전송 실패는 대기열에 남기며 다음 예약 호출이나 같은 발신자의 콕 찌르기 요청 때 재시도합니다. 최대 5회, 생성 후 24시간 이내 작업만 처리합니다. 각 호출은 최대 100개 작업을 처리하므로 대규모 운영에는 예약 호출 주기와 처리량 조정이 필요합니다. 만료된 구독은 자동으로 삭제하고 전송 이력은 7일 뒤 정리합니다. 전송 결과가 불확실한 네트워크 실패에서는 재시도로 알림이 중복될 수 있습니다.
+
+운영 서버에서는 Vercel Cron이 예약 호출을 담당합니다. 로컬 `npm start`에는 예약 실행기가 없으므로 검증용 스케줄러에서 같은 인증 헤더로 예약 API를 호출해야 합니다.
+
+공식 안내: [Apple 웹 푸시](https://developer.apple.com/documentation/usernotifications/sending-web-push-notifications-in-web-apps-and-browsers), [Vercel Cron 보안](https://vercel.com/docs/cron-jobs/manage-cron-jobs), [Vercel 예약 실행 제한](https://vercel.com/docs/cron-jobs/usage-and-pricing).
 
 | 저장소 | 내용 |
 | --- | --- |
 | Supabase Auth | 사용자 UUID, Google 연결 정보, 로그인 세션 |
 | `user_states` | 프로필, 사진, 개인 기록, 카테고리, 설정, 저장 버전 |
 | `app_groups`, `app_memberships` | 그룹, 초대 코드, 실제 사용자 멤버십 |
-| `app_pokes` | 기간별 콕 찌르기와 수신자의 앱 내 알림 읽음 상태 |
+| `app_pokes` | 5분 간격의 콕 찌르기와 수신자의 앱 내 알림 읽음 상태 |
+| `app_push_subscriptions`, `app_push_jobs` | 기기별 웹 푸시 구독과 전송 대기열 |
 | `app_ai_runs` | AI 입력과 결과, 최근 활동 조회 |
 
 개인 기록은 사용자별 RLS로 보호합니다. 그룹과 AI 이력 테이블은 클라이언트의 직접 접근을 막고, 로그인 사용자와 멤버십을 검사하는 DB 함수를 통해서만 처리합니다. 비공개 기록의 원문은 그룹 멤버에게도 반환하지 않습니다. 그룹 탈퇴 시 공유 접근을 종료하고 소유자를 다음 멤버로 넘기거나 빈 그룹을 삭제합니다.
@@ -113,6 +138,6 @@ Google 로그인, 기존 기록 조회, 새 기록 저장, 다른 기기 재조�
 ## 현재 한계 (해커톤 시연 버전)
 
 - 마감 알림은 앱을 열었을 때만 표시됩니다.
-- 콕 찌르기는 앱 내 알림이며 이메일이나 모바일 푸시로 전송하지 않습니다.
+- 콕 찌르기는 앱 내 알림과 웹 푸시로 전달합니다. 웹 푸시는 아래 서버 설정과 기기별 권한 허용이 필요합니다.
 - AI 활동은 DB에 모두 저장하며 화면에서는 최근 30개를 조회합니다.
 - UI 검사는 DOM 기반 자동 테스트입니다. 실제 Google 계정으로 로그인하는 최종 검증은 별도로 필요합니다.

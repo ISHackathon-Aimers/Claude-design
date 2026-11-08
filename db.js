@@ -163,7 +163,7 @@ export class Store {
         }),
       }));
       const pokes = {};
-      for (const p of this.db.prepare('SELECT * FROM pokes WHERE sender_id=?').all(userId)) pokes[`${p.group_id}:${p.recipient_id}:${p.period}`] = p.date;
+      for (const p of this.db.prepare('SELECT group_id, recipient_id, MAX(created_at) AS sent_at FROM pokes WHERE sender_id=? GROUP BY group_id, recipient_id').all(userId)) pokes[`${p.group_id}:${p.recipient_id}`] = p.sent_at;
       const notifications = this.db.prepare(`SELECT p.id, p.group_id AS groupId, p.created_at AS createdAt, g.name AS groupName,
           pr.data AS senderProfile FROM pokes p JOIN groups g ON g.id=p.group_id JOIN profiles pr ON pr.user_id=p.sender_id
           JOIN memberships m ON m.group_id=p.group_id AND m.user_id=p.recipient_id
@@ -232,7 +232,11 @@ export class Store {
       const stats = streakInfo(p.entries.map((e) => e.date), p.profile.startDate, p.profile.periodDays, todayStr());
       if (stats.doneNow || stats.current < 0) fail('현재 기록을 독촉할 수 없는 멤버입니다.');
       const period = periodIndex(todayStr(), p.profile.startDate, p.profile.periodDays);
-      this.db.prepare(`INSERT OR IGNORE INTO pokes VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`)
+      const last = this.db.prepare('SELECT MAX(created_at) AS sent_at FROM pokes WHERE group_id=? AND sender_id=? AND recipient_id=?').get(groupId, userId, recipientId);
+      if (last.sent_at != null && Date.now() - last.sent_at < 300000) return { ok: true };
+      this.db.prepare(`INSERT INTO pokes VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(group_id, sender_id, recipient_id, period) DO UPDATE SET
+          id=excluded.id, date=excluded.date, created_at=excluded.created_at, read_at=NULL`)
         .run(randomUUID(), groupId, userId, recipientId, period, todayStr(), Date.now());
       return { ok: true };
     });
