@@ -43,4 +43,28 @@ export function semesterOf(date) {
   return { key: `${y - 1}-2`, label: `${y - 1}년 2학기` };
 }
 
-export const fireLevel = (streak) => (streak >= 20 ? 2 : streak >= 10 ? 1 : 0);
+// 검색어가 날짜 모양이면 날짜 조건으로 바꾼다: 2026.11.08 / 2026-11-08 / 11.08 / 11월 8일 / 11월 / 2026년 11월
+export function parseDateQuery(q) {
+  const s = q.trim().replace(/\s+/g, ' ');
+  let m;
+  if ((m = s.match(/^(\d{4}) ?[.\-/년] ?(\d{1,2}) ?[.\-/월] ?(\d{1,2}) ?일?\.?$/))) return { y: +m[1], m: +m[2], d: +m[3] };
+  if ((m = s.match(/^(\d{4}) ?[.\-/년] ?(\d{1,2}) ?월?\.?$/))) return { y: +m[1], m: +m[2] };
+  if ((m = s.match(/^(\d{1,2}) ?[./] ?(\d{1,2})\.?$/)) || (m = s.match(/^(\d{1,2}) ?월 ?(\d{1,2}) ?일?$/))) return { m: +m[1], d: +m[2] };
+  if ((m = s.match(/^(\d{1,2}) ?월$/))) return { m: +m[1] };
+  return null;
+}
+
+// 기록 검색: 날짜 모양이면 날짜로, 아니면 제목·요약·원문·답변·카테고리·태그에서 모든 단어를 찾는다
+export function matchEntry(e, q) {
+  const s = q.trim().toLowerCase();
+  if (!s) return true;
+  const dq = parseDateQuery(s);
+  if (dq) {
+    const [y, m, d] = e.date.split('-').map(Number);
+    return (!dq.y || dq.y === y) && (!dq.m || dq.m === m) && (!dq.d || dq.d === d);
+  }
+  const hay = [e.title, e.summary, e.raw, e.category, ...(e.tags || []), ...(e.qa || []).flatMap((x) => [x.q, x.a])].join(' ').toLowerCase();
+  return s.split(/\s+/).every((w) => hay.includes(w));
+}
+
+export const fireLevel =(streak) => (streak >= 20 ? 2 : streak >= 10 ? 1 : 0);

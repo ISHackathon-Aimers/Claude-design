@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
-import { defaultProfile } from './db.js';
+import { defaultProfile, validateState } from './db.js';
 import { sessionManager } from './public/session.js';
 
 let moduleId = 0;
@@ -11,7 +11,7 @@ async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); }
   assert.fail('UI did not reach the expected state');
 }
-async function app(t, { failLoad = false, legacy = false } = {}) {
+async function app(t, { failLoad = false, legacy = false, oldLegacy = false } = {}) {
   const html = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:3000/#/profile' });
   t.after(() => dom.window.close());
@@ -37,6 +37,10 @@ async function app(t, { failLoad = false, legacy = false } = {}) {
   t.mock.method(sessionManager, 'current', async () => session);
   t.mock.method(sessionManager, 'headers', async () => ({ authorization: 'Bearer test-access-token' }));
   if (legacy) dom.window.localStorage.setItem('aimers-v1:google:google-user', JSON.stringify({ ...state, profile: { ...state.profile, name: 'Old User' } }));
+  // 초기 버전 형식: 화면 모드(theme)가 없고 글꼴(font)·글자 크기 90이 들어 있다
+  if (oldLegacy) dom.window.localStorage.setItem('aimers-v1', JSON.stringify({ v: 1,
+    profile: { name: 'First Version', bio: '', photo: '', public: true, periodDays: 7, startDate: '2025-09-13', notify: false, font: 'pretendard', fontScale: 90 },
+    categories: ['프로젝트'], entries: [{ id: 'old1', date: '2025-10-01', category: '동아리', title: '옛 기록', summary: '요약', raw: '원문', tags: ['협업'], qa: [] }], groups: [], pokes: {} }));
   globalThis.fetch = async (url, options = {}) => {
     if (url === '/api/auth/session') return Response.json({ enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } });
     if (url === '/api/ai/history') return Response.json({ runs: [] });
@@ -55,6 +59,7 @@ async function app(t, { failLoad = false, legacy = false } = {}) {
       if (pause) { const waiting = pause; pause = null; await waiting; }
       if (failSave) throw new Error('Offline');
       if (stale || body.revision !== revision) return Response.json({ error: 'Conflict detected' }, { status: 409 });
+      try { validateState(body.state); } catch (e) { return Response.json({ error: e.message }, { status: 400 }); } // 실제 서버와 같은 검사
       state = body.state; revision++;
       return Response.json({ revision });
     }
@@ -143,4 +148,52 @@ test('UI: record creation retains its draft on failure and retry never duplicate
   await until(() => a.state.entries.length === 1 && !document.querySelector('#sheet').open);
   assert.equal(a.state.entries[0].raw, 'My original experience');
   assert.equal(a.writes[0].state.entries[0].id, a.writes[1].state.entries[0].id);
+});
+
+test('UI: records from the first app version import even though their profile format is older', async (t) => {
+  const a = await app(t, { oldLegacy: true });
+  await until(() => document.querySelector('[data-act="import-legacy"]'));
+  document.querySelector('[data-act="import-legacy"]').click();
+  await until(() => a.state.profile.name === 'First Version');
+  assert.equal(a.state.profile.theme, 'system');
+  assert.equal(a.state.profile.fontScale, 100);
+  assert.equal('font' in a.state.profile, false);
+  assert.deepEqual(a.state.entries.map((e) => e.title), ['옛 기록']);
+  assert.ok(a.state.categories.includes('동아리')); // 기록에만 있던 카테고리도 함께 들어온다
+});
+
+test('UI: the ⋯ menu on a record edits it in place and deletes it', async (t) => {
+  const a = await app(t);
+  location.hash = '#/records';
+  await until(() => document.querySelector('[data-act="record"]'));
+  document.querySelector('[data-act="record"]').click();
+  const raw = document.querySelector('#rec-raw');
+  raw.value = 'Original text'; raw.dispatchEvent(new a.dom.window.Event('input', { bubbles: true }));
+  document.querySelector('[data-act="rec-next"]').click();
+  await until(() => document.querySelector('[data-act="rec-save"]'));
+  document.querySelector('[data-act="rec-save"]').click();
+  await until(() => a.state.entries.length === 1 && !document.querySelector('#sheet').open);
+  await until(() => document.querySelector('#rec-list .entry'));
+
+  const kebab = document.querySelector('#rec-list [data-act="entry-menu"]');
+  const menu = kebab.nextElementSibling;
+  assert.equal(menu.hidden, true);
+  kebab.click();
+  assert.equal(menu.hidden, false);
+  document.body.click(); // 바깥을 누르면 닫힌다
+  assert.equal(menu.hidden, true);
+
+  kebab.click();
+  menu.querySelector('[data-act="edit-entry"]').click();
+  assert.equal(document.querySelector('#sheet').open, true);
+  const title = document.querySelector('#e-title');
+  title.value = 'Edited title'; title.dispatchEvent(new a.dom.window.Event('input', { bubbles: true }));
+  document.querySelector('[data-act="edit-save"]').click();
+  await until(() => a.state.entries[0]?.title === 'Edited title' && !document.querySelector('#sheet').open);
+  assert.equal(a.state.entries.length, 1);
+  assert.equal(a.state.entries[0].raw, 'Original text');
+
+  document.querySelector('#rec-list [data-act="entry-menu"]').click();
+  document.querySelector('#rec-list [data-act="del-entry"]').click();
+  await until(() => a.state.entries.length === 0);
 });

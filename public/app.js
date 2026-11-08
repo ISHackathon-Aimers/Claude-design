@@ -1,4 +1,4 @@
-import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday } from './logic.js';
+import { todayStr, periodIndex, periodRange, streakInfo, daysLeft, semesterOf, fireLevel, fromDay, toDay, weekday, matchEntry } from './logic.js';
 import { sessionManager } from './session.js';
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
@@ -32,6 +32,8 @@ const ICONS = {
   trend: '<path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+  dots: '<circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/>',
+  edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
   trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   sparkle: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
@@ -71,7 +73,7 @@ function seed() {
   // 최근 12주 연속 기록(9·12주 전은 위의 기록으로 채워짐)
   const fillers = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11].map((w, i) =>
     e(w * 7 - 2, '전공공부', study[i], `${study[i]}을(를) 공부했다. 수업 내용을 복습하고 노트에 정리했다.`,
-      `${study[i]}을(를) 공부하고 핵심 개념을 노트에 정리했습니다.`, i % 3 ? ['전공 역량'] : ['전공 역량', '성실성']));
+      `${study[i]}을(를) 공부하고 핵심 개념을 노트에 정리했습니다.`, ['전공 역량']));
   // 멤버마다 기록 주기(days)와 시작일이 다르다. 완료 여부는 각자의 이번 기간에 마지막 기록(lastAgo일 전)이 들어 있는지로 정해진다.
   const member = (name, color, isPublic, { days, startAgo, lastAgo }, streak, entries) => ({
     id: uid(), name, color, public: isPublic, periodDays: days, startDate: ago(startAgo),
@@ -185,7 +187,7 @@ async function refreshData() {
 
 let S = seed();
 const ui = {
-  sort: 'time', cat: 'all', demo: false, newGroup: false,
+  cat: 'all', q: '', date: '', day: '', demo: false, newGroup: false,
   rec: null,
   interview: { theme: '', questions: [], active: -1, answer: '', feedback: null, loading: '' },
   match: { prompt: '', results: null, loading: false },
@@ -240,7 +242,9 @@ function memberStatus(m) {
   return { done: periodIndex(m.lastEntryDate, m.startDate, days) === cur, streak: m.streak, left, days };
 }
 const me = () => ({ id: 'me', me: true, name: S.profile.name, color: '#e11d48', photo: S.profile.photo, public: S.profile.public });
-const avatar = (m) => `<span class="avatar" style="background:${esc(m.color)}">${m.photo ? `<img src="${m.photo}" alt="">` : esc((m.name || '?').slice(0, 1))}</span>`;
+// 이름 첫 글자: Google 이름 앞에 붙는 보이지 않는 문자(소프트 하이픈 등)는 건너뛴다
+const initial = (name = '') => [...name.replace(/[\s\u00ad\u200b-\u200f\u2060\ufeff]/g, '')][0] || '?';
+const avatar = (m) => `<span class="avatar" style="background:${esc(m.color)}">${m.photo ? `<img src="${m.photo}" alt="">` : esc(initial(m.name))}</span>`;
 // 연속 기록이 10회·20회를 넘으면 프로필에 불꽃 테두리와 연속 횟수 배지가 붙는다
 function fireRing(m, streak, cls = '') {
   const lvl = fireLevel(streak);
@@ -254,7 +258,13 @@ const durationText = (periods, len) => {
 
 function entryCard(e, owner = true, open = false) {
   return `<article class="card entry">
-    <div class="entry-meta"><span class="tag-cat">#${esc(e.category)}</span><time datetime="${e.date}">${fmt(e.date)}</time></div>
+    <div class="entry-meta"><span class="tag-cat">#${esc(e.category)}</span>
+      <span class="meta-right"><time datetime="${e.date}">${fmt(e.date)}</time>${owner ? `<span class="entry-menu-wrap">
+        <button class="icon-btn kebab" data-act="entry-menu" aria-label="기록 메뉴" aria-haspopup="menu" aria-expanded="false">${icon('dots', 20)}</button>
+        <span class="menu" role="menu" hidden>
+          <button role="menuitem" data-act="edit-entry" data-v="${e.id}">${icon('edit', 18)} 수정</button>
+          <button role="menuitem" class="danger" data-act="del-entry" data-v="${e.id}">${icon('trash', 18)} 삭제</button>
+        </span></span>` : ''}</span></div>
     <h3>${esc(e.title)}</h3>
     <p>${esc(e.summary)}</p>
     ${e.tags?.length ? `<ul class="tags" aria-label="역량">${e.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
@@ -262,22 +272,35 @@ function entryCard(e, owner = true, open = false) {
       <p class="pre">${esc(e.raw)}</p>
       ${(e.qa || []).map((x) => `<p class="qa-q">Q. ${esc(x.q)}</p><p class="pre">${x.a ? esc(x.a) : '<span class="muted">(답변 없음)</span>'}</p>`).join('')}
     </div></details>` : ''}
-    ${owner ? `<button class="link danger" data-act="del-entry" data-v="${e.id}">기록 삭제</button>` : ''}
   </article>`;
 }
 
 // ───────── 1번 탭: 내 대시보드 ─────────
-// 이번 기간의 날짜 버튼 줄: 날짜를 누르면 그날 기록을 쓴다
+// 이번 기간의 날짜 버튼 줄: 날짜를 누르면 그날 쓴 기록을 아래에 보여 준다
 function dayStrip(start, len) {
   const today = todayStr();
   const has = new Set(S.entries.map((e) => e.date));
   const days = Array.from({ length: len }, (_, k) => fromDay(toDay(start) + k));
-  return `<div class="days${len > 7 ? ' scroll' : ''}" role="group" aria-label="날짜를 골라 기록하기">${days.map((d) => {
+  if (!days.includes(ui.day)) ui.day = days.includes(today) ? today : days[0]; // 기간이 바뀌면 오늘로
+  return `<div class="days${len > 7 ? ' scroll' : ''}" role="group" aria-label="날짜를 골라 그날 기록 보기">${days.map((d) => {
     const future = d > today;
     return `<button type="button" class="day${d === today ? ' today' : ''}${has.has(d) ? ' has' : ''}" data-act="pick-day" data-v="${d}" ${future ? 'disabled' : ''}
-      aria-label="${fmtLong(d)}${d === today ? ', 오늘' : ''}${has.has(d) ? ', 기록 있음' : ''}">
+      aria-pressed="${d === ui.day}" aria-label="${fmtLong(d)}${d === today ? ', 오늘' : ''}${has.has(d) ? ', 기록 있음' : ''}">
       <span class="dw${dayClass(d)}">${DAYS[weekday(d)]}</span><span class="dn">${Number(d.slice(8))}</span><span class="dot" aria-hidden="true"></span></button>`;
-  }).join('')}</div><p class="help">날짜를 누르면 그날의 경험을 기록할 수 있어요.</p>`;
+  }).join('')}</div>${dayRecords(ui.day)}`;
+}
+
+// 고른 날짜에 쓴 기록 목록
+function dayRecords(d) {
+  const list = S.entries.filter((e) => e.date === d);
+  const label = d === todayStr() ? `오늘(${fmtLong(d)})` : fmtLong(d);
+  return `<div class="day-panel" aria-live="polite">
+    <strong class="day-title">${label} 기록 ${list.length}개</strong>
+    ${list.length
+      ? `<ul class="mini-list day-list${list.length === 1 ? ' single' : ''}">${list.map((e) => `<li><a class="mini-row" href="#/entry/${e.id}">
+          <span class="mini-main"><span class="tag-cat">#${esc(e.category)}</span><strong>${esc(e.title)}</strong></span>${icon('next', 18)}</a></li>`).join('')}</ul>`
+      : '<p class="day-empty muted">이 날은 아직 기록이 없어요.<br>아래 버튼으로 기록해 보세요.</p>'}
+  </div>`;
 }
 
 function dashboard() {
@@ -294,7 +317,7 @@ function dashboard() {
         : s.left <= 2
           ? `<p class="warn">${icon('bell', 18)} 기록 마감까지 ${s.left === 0 ? '오늘 하루' : `${s.left}일`} 남았어요.</p>`
           : '<p class="muted">이번 기간에 한 일을 남겨 주세요. 적을 게 없다면 그 주에 한 전공 공부도 좋아요.</p>'}
-      <button class="btn ${s.doneNow ? 'secondary' : 'primary'} block" data-act="record">${icon('plus')} ${s.doneNow ? '기록 추가하기' : '이번 기간 경험 기록하기'}</button>
+      <button class="btn ${s.doneNow ? 'secondary' : 'primary'} block" data-act="day-record" data-v="${ui.day}">${icon('plus')} ${ui.day === todayStr() ? (s.doneNow ? '오늘 기록 추가하기' : '이번 기간 경험 기록하기') : `${fmtLong(ui.day).replace(/ \S+요일$/, '')} 기록 추가하기`}</button>
     </section>`;
 
   const first = S.entries.map((e) => e.date).sort()[0];
@@ -344,25 +367,38 @@ function dashboard() {
 // ───────── 2번 탭: 내 기록 ─────────
 function records() {
   const cats = [...new Set([...S.categories, ...S.entries.map((e) => e.category)])];
-  const shown = S.entries.filter((e) => ui.cat === 'all' || e.category === ui.cat).sort((a, b) => b.date.localeCompare(a.date));
-  let list;
-  if (!S.entries.length) list = `<div class="empty"><p>아직 기록이 없어요.<br>첫 한 걸음을 남겨 보세요.</p></div>`;
-  else if (!shown.length) list = '<p class="empty">이 카테고리의 기록이 없어요.</p>';
-  else if (ui.sort === 'cat') list = cats.filter((c) => shown.some((e) => e.category === c))
-    .map((c) => `<h3 class="group-label">#${esc(c)} · ${shown.filter((e) => e.category === c).length}개</h3>${shown.filter((e) => e.category === c).map((e) => entryCard(e)).join('')}`).join('');
-  else list = shown.map((e) => entryCard(e)).join('');
   return {
     html: `<div class="list-head"><p class="lead">총 ${S.entries.length}개의 경험을 기록했어요.</p>
       <button class="btn small primary" data-act="record">${icon('plus', 18)} 기록하기</button></div>
-    <div class="list-head"><div class="seg" role="group" aria-label="정렬 방식">
-        <button data-act="sort" data-v="time" aria-pressed="${ui.sort === 'time'}">시간순</button>
-        <button data-act="sort" data-v="cat" aria-pressed="${ui.sort === 'cat'}">카테고리순</button>
-      </div></div>
+    <div class="search-row">
+      <label class="search" for="rec-q">${icon('search', 18)}<span class="sr-only">기록 검색</span>
+        <input id="rec-q" type="search" data-search placeholder="내용 또는 날짜(11.08)로 검색" value="${esc(ui.q)}" autocomplete="off" enterkeyhint="search"></label>
+      <button class="icon-btn date-pick${ui.date ? ' on' : ''}" data-act="rec-date" aria-label="달력에서 날짜로 찾기">${icon('calendar', 20)}</button>
+    </div>
+    ${ui.date ? `<div><button class="chip on" data-act="rec-date-clear" aria-label="${fmtLong(ui.date)} 조건 지우기">${icon('calendar', 14)} ${fmtW(ui.date)} ${icon('x', 14)}</button></div>` : ''}
     <div class="chips" role="group" aria-label="카테고리 필터">
       ${['all', ...cats].map((c) => `<button class="chip" data-act="cat" data-v="${esc(c)}" aria-pressed="${ui.cat === c}">${c === 'all' ? '전체' : `#${esc(c)}`}</button>`).join('')}
     </div>
-    ${list}`,
+    <p class="result-line" id="rec-count" aria-live="polite"></p>
+    <div id="rec-list" class="rec-list"></div>`,
   };
+}
+
+// 검색어를 칠 때마다 목록 부분만 다시 그려서 입력 칸의 포커스가 유지되게 한다
+function updateRecords() {
+  const list = $('#rec-list');
+  if (!list) return;
+  const shown = S.entries
+    .filter((e) => (ui.cat === 'all' || e.category === ui.cat) && (!ui.date || e.date === ui.date) && matchEntry(e, ui.q))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const label = [ui.cat === 'all' ? '전체' : `#${ui.cat}`, ui.date && fmtW(ui.date), ui.q.trim() && `'${ui.q.trim()}' 검색`].filter(Boolean).join(' · ');
+  $('#rec-count').innerHTML = `${esc(label)} <strong>${shown.length}개</strong>`;
+  const filtered = ui.q.trim() || ui.date;
+  list.innerHTML = !S.entries.length
+    ? '<div class="empty"><p>아직 기록이 없어요.<br>첫 한 걸음을 남겨 보세요.</p></div>'
+    : shown.length
+      ? shown.map((e) => entryCard(e)).join('')
+      : `<div class="empty"><p>${filtered ? '조건에 맞는 기록이 없어요.' : '이 카테고리의 기록이 없어요.'}</p>${filtered ? '<button class="btn small secondary" data-act="rec-clear">검색 조건 지우기</button>' : ''}</div>`;
 }
 
 // 기록 하나를 크게 보기 (추천 경험·대시보드에서 눌러 들어온다)
@@ -380,6 +416,28 @@ function openRecord(date = todayStr()) {
   renderSheet();
   $('#sheet').showModal();
 }
+// 카테고리(＋추가)와 날짜 입력: 새 기록 작성과 기록 수정에서 함께 쓴다
+function catDateFields(r) {
+  return `<fieldset><legend>카테고리</legend>
+        <div class="chips wrap">${S.categories.map((c) => `<button type="button" class="chip" data-act="rec-cat" data-v="${esc(c)}" aria-pressed="${r.category === c}">#${esc(c)}</button>`).join('')}
+          <button type="button" class="chip add-chip" data-act="rec-add-cat" aria-label="카테고리 추가" aria-expanded="${!!r.addingCat}">${icon('plus', 16)}</button></div>
+        ${r.addingCat ? `<form class="inline add-cat-form" data-form="add-cat"><label class="sr-only" for="new-cat">새 카테고리 이름</label><input id="new-cat" name="label" maxlength="15" placeholder="새 카테고리 (예: 인턴)" autocomplete="off">
+          <button class="btn small primary">추가</button><button type="button" class="btn small secondary" data-act="rec-add-cat">취소</button></form>` : ''}
+      </fieldset>
+      <div class="field"><span class="label" id="rec-date-l">날짜</span>
+        <button type="button" class="date-btn" data-act="cal-rec" aria-labelledby="rec-date-l rec-date-v">${icon('calendar')}<span id="rec-date-v">${fmtW(r.date)}</span></button></div>`;
+}
+
+const editSnapshot = (r) => JSON.stringify([r.category, r.date, r.draft.title, r.draft.summary, r.raw]);
+function openEdit(id) {
+  const e = S.entries.find((x) => x.id === id);
+  if (!e) return;
+  ui.rec = { step: 'edit', id, category: e.category, date: e.date, raw: e.raw || '', draft: { title: e.title, summary: e.summary }, loading: false, error: '' };
+  ui.rec.orig = editSnapshot(ui.rec);
+  renderSheet();
+  $('#sheet').showModal();
+}
+
 function renderSheet() {
   const r = ui.rec;
   if (!r) return;
@@ -388,14 +446,17 @@ function renderSheet() {
   const busy = (label) => (r.loading ? `${spinner} ${label}` : '');
   let body;
   let foot;
-  if (r.step === 'write') {
+  if (r.step === 'edit') {
+    body = `${catDateFields(r)}
+      <div class="field"><label for="e-title">제목</label><input id="e-title" maxlength="60" data-model="rec.draft.title" value="${esc(r.draft.title)}"></div>
+      <div class="field"><label for="e-summary">요약</label><textarea id="e-summary" rows="4" maxlength="600" data-model="rec.draft.summary">${esc(r.draft.summary)}</textarea></div>
+      <div class="field"><label for="e-raw">원문</label><textarea id="e-raw" rows="5" maxlength="4000" data-model="rec.raw">${esc(r.raw)}</textarea>
+        <p class="help">원문을 고쳐도 AI 요약은 다시 만들지 않아요. 요약도 함께 고쳐 주세요.</p></div>${err}`;
+    foot = `<button class="btn secondary" data-act="close-sheet" ${r.loading ? 'disabled' : ''}>취소</button>
+      <button class="btn primary" data-act="edit-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 수정 완료`}</button>`;
+  } else if (r.step === 'write') {
     body = `<p class="step">1 / 3 · 경험 쓰기</p>
-      <fieldset><legend>카테고리</legend>
-        <div class="chips wrap">${S.categories.map((c) => `<button type="button" class="chip" data-act="rec-cat" data-v="${esc(c)}" aria-pressed="${r.category === c}">#${esc(c)}</button>`).join('')}</div>
-        <form class="inline" data-form="add-cat"><label class="sr-only" for="new-cat">새 카테고리 이름</label><input id="new-cat" name="label" maxlength="15" placeholder="새 카테고리 (예: 인턴)" autocomplete="off"><button class="btn small secondary">추가</button></form>
-      </fieldset>
-      <div class="field"><span class="label" id="rec-date-l">날짜</span>
-        <button type="button" class="date-btn" data-act="cal-rec" aria-labelledby="rec-date-l rec-date-v">${icon('calendar')}<span id="rec-date-v">${fmtW(r.date)}</span></button></div>
+${catDateFields(r)}
       <div class="field"><label for="rec-raw">이번 기간에 한 일</label>
         <textarea id="rec-raw" rows="6" maxlength="4000" data-model="rec.raw" placeholder="예: 팀 프로젝트에서 회원가입 화면을 만들었어요.">${esc(r.raw)}</textarea>
         <p class="help">짧게 써도 괜찮아요. 부족한 부분은 AI가 질문으로 채워 드려요.</p></div>${err}`;
@@ -415,7 +476,7 @@ function renderSheet() {
       ${d.tags.length ? `<div class="field"><span class="eyebrow">드러난 역량</span><ul class="tags">${d.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}${err}`;
     foot = `<button class="btn secondary" data-act="rec-back" ${r.loading ? 'disabled' : ''}>이전</button><button class="btn primary" data-act="rec-save" ${r.loading ? 'disabled' : ''}>${r.loading ? `${spinner} 저장 중...` : `${icon('check')} 저장하기`}</button>`;
   }
-  $('#sheet').innerHTML = `${head('경험 기록하기')}<div class="sheet-body">${body}</div><footer class="sheet-foot">${foot}</footer>`;
+  $('#sheet').innerHTML = `${head(r.step === 'edit' ? '기록 수정하기' : '경험 기록하기')}<div class="sheet-body">${body}</div><footer class="sheet-foot">${foot}</footer>`;
 }
 
 async function summarize() {
@@ -743,7 +804,6 @@ function profile() {
     <section class="card"><h2>화면 설정</h2>
       <div class="field"><span class="label" id="theme-l">화면 모드</span>
         <div class="seg full" role="group" aria-labelledby="theme-l">${[['system', '시스템 설정'], ['light', '라이트'], ['dark', '다크']].map(([v, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${(p.theme || 'system') === v}">${l}</button>`).join('')}</div></div>
-      <div class="field"><label for="pf-scale">글자 크기 <output id="scale-out">${p.fontScale}%</output></label><input type="range" id="pf-scale" min="90" max="130" step="10" data-pf="fontScale" value="${p.fontScale}"></div>
     </section>
     <button class="btn secondary block" data-act="reset">${auth.user ? '기록과 설정 초기화' : '시연 데이터로 초기화'}</button>`,
   };
@@ -771,7 +831,24 @@ function applyPrefs() {
   const theme = S.profile.theme || 'system';
   if (theme === 'system') root.removeAttribute('data-theme');
   else root.dataset.theme = theme;
-  root.style.fontSize = `${S.profile.fontScale}%`;
+}
+
+// 예전 버전에서 쓰던 기록은 프로필 항목이 지금과 다르다(화면 모드 없음, 글꼴·글자 크기 있음).
+// 서버가 받는 항목만 골라 담고, 없거나 잘못된 값은 현재 설정으로 채운다.
+function legacyProfile(old, cur) {
+  const pick = (v, ok, fallback) => (ok(v) ? v : fallback);
+  const isText = (v) => typeof v === 'string';
+  return {
+    name: pick(old.name, (v) => isText(v) && v.trim(), cur.name).slice(0, 20),
+    bio: pick(old.bio, isText, cur.bio || '').slice(0, 40),
+    photo: pick(old.photo, (v) => isText(v) && (!v || /^data:image\/(jpeg|png|webp);base64,/.test(v)), cur.photo || ''),
+    public: cur.public, // 공개 설정은 현재 계정 설정 유지
+    periodDays: pick(old.periodDays, (v) => [7, 14, 30].includes(v), cur.periodDays),
+    startDate: pick(old.startDate, (v) => isText(v) && /^\d{4}-\d{2}-\d{2}$/.test(v), cur.startDate),
+    notify: pick(old.notify, (v) => typeof v === 'boolean', cur.notify),
+    theme: pick(old.theme, (v) => ['system', 'light', 'dark'].includes(v), cur.theme || 'system'),
+    fontScale: 100, // 글자 크기 설정은 없앴으므로 기본 크기
+  };
 }
 
 // ───────── 확인창 ─────────
@@ -788,7 +865,8 @@ function ask(message, okLabel = '확인', danger = false) {
 
 async function closeSheet() {
   if (ui.rec?.loading) { toast('처리 중이에요. 완료될 때까지 기다려 주세요.'); return; }
-  if (ui.rec?.raw.trim() && !(await ask('작성 중인 내용이 사라져요. 닫을까요?', '닫기'))) return;
+  const dirty = ui.rec?.step === 'edit' ? editSnapshot(ui.rec) !== ui.rec.orig : ui.rec?.raw.trim();
+  if (dirty && !(await ask(ui.rec.step === 'edit' ? '수정한 내용이 사라져요. 닫을까요?' : '작성 중인 내용이 사라져요. 닫을까요?', '닫기'))) return;
   ui.rec = null;
   $('#sheet').close();
 }
@@ -867,11 +945,21 @@ function renderTop() {
     ? `${backBtn}<h1>${esc(v.title)}</h1>${badge}`
     : `<h1 class="logo">AIM<b>ers</b></h1>${badge}${profileBtn}`;
 }
+// 가로로 넘기는 줄 안에서 el이 가운데 오도록 스크롤한다
+function centerIn(box, el) {
+  const b = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  box.scrollLeft += r.left - b.left - (b.width - r.width) / 2;
+}
 function render(scroll = false) {
   if (auth.loading || (auth.user && !sync.ready)) return;
   current = view();
   renderTop();
   $('#main').innerHTML = current.html;
+  updateRecords();
+  const chips = $('#main .chips');
+  const picked = chips && $('[aria-pressed="true"]', chips);
+  if (picked) centerIn(chips, picked); // 고른 카테고리가 보이게
   document.querySelectorAll('[data-pf]').forEach((el) => { el.disabled = !auth.user; });
   const tab = route()[0] || 'dashboard';
   document.querySelectorAll('.tabbar a').forEach((a) => (a.dataset.tab === tab ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
@@ -879,7 +967,7 @@ function render(scroll = false) {
   if (scroll) { window.scrollTo(0, 0); $('#main').focus({ preventScroll: true }); }
   const strip = $('.days.scroll');
   const t = strip && $('.day.today', strip);
-  if (t) strip.scrollLeft = t.offsetLeft - strip.clientWidth / 2 + t.clientWidth / 2;
+  if (t) centerIn(strip, t);
 }
 
 // ───────── 이벤트 ─────────
@@ -903,7 +991,9 @@ const actions = {
   },
   'import-legacy': async () => {
     if (!legacyState || !(await ask('이전 기록과 설정으로 현재 기록과 설정을 교체할까요? 그룹과 공개 설정은 현재 상태를 유지해요.', '가져오기'))) return;
-    S = { ...S, profile: { ...legacyState.profile, public: S.profile.public }, entries: legacyState.entries, categories: legacyState.categories, lastNotified: legacyState.lastNotified || '' };
+    const entries = (legacyState.entries || []).map((e) => ({ ...e, tags: e.tags || [], qa: e.qa || [] }));
+    const categories = [...new Set([...(legacyState.categories || []), ...entries.map((e) => e.category)])];
+    S = { ...S, profile: legacyProfile(legacyState.profile || {}, S.profile), entries, categories: categories.length ? categories : S.categories, lastNotified: legacyState.lastNotified || '' };
     if (await save()) { legacyState = null; applyPrefs(); render(); toast('이전 기록을 서버에 저장했어요.'); }
     else render();
   },
@@ -920,7 +1010,8 @@ const actions = {
     }
   },
   record: () => openRecord(),
-  'pick-day': (el) => openRecord(el.dataset.v),
+  'pick-day': (el) => { ui.day = el.dataset.v; render(); },
+  'day-record': (el) => openRecord(el.dataset.v),
   'cal-rec': () => openCalendar({ value: ui.rec.date, max: todayStr(), title: '기록 날짜', onPick: (d) => { ui.rec.date = d; renderSheet(); } }),
   'cal-start': () => openCalendar({ value: S.profile.startDate, title: '기록 시작 날짜', onPick: (d) => { S.profile.startDate = d; save(); render(); toast(`${fmtW(d)}부터 기록 기간을 계산해요.`); } }),
   'cal-move': (el) => {
@@ -946,17 +1037,47 @@ const actions = {
     if (ui.cat === c) ui.cat = 'all';
     save(); render(); toast(`'${c}' 카테고리를 삭제했어요.`);
   },
-  sort: (el) => { ui.sort = el.dataset.v; render(); },
+  'rec-date': () => openCalendar({ value: ui.date || todayStr(), max: todayStr(), title: '날짜로 기록 찾기', onPick: (d) => { ui.date = d; render(); } }),
+  'rec-date-clear': () => { ui.date = ''; render(); },
+  'rec-clear': () => { ui.q = ''; ui.date = ''; render(); },
   cat: (el) => { ui.cat = el.dataset.v; render(); },
   'del-entry': async (el) => {
+    closeMenus();
     if (!(await ask('이 기록을 삭제할까요?\n되돌릴 수 없어요.', '삭제', true))) return;
     S.entries = S.entries.filter((e) => e.id !== el.dataset.v);
     save(); toast('기록을 삭제했어요.');
     if (route()[0] === 'entry') actions['go-back'](); else render();
   },
+  'entry-menu': (el) => {
+    const menu = el.nextElementSibling;
+    const open = menu.hidden;
+    closeMenus();
+    menu.hidden = !open;
+    el.setAttribute('aria-expanded', String(open));
+    if (open) menu.querySelector('[role="menuitem"]').focus();
+  },
+  'edit-entry': (el) => { closeMenus(); openEdit(el.dataset.v); },
+  'edit-save': async () => {
+    const r = ui.rec;
+    if (r.loading) return;
+    if (!r.draft.title.trim() || !r.draft.summary.trim()) { r.error = '제목과 요약을 입력해 주세요.'; renderSheet(); return; }
+    const e = S.entries.find((x) => x.id === r.id);
+    if (!e) { r.error = '기록을 찾을 수 없어요. 삭제되었을 수 있어요.'; renderSheet(); return; }
+    Object.assign(e, { category: r.category, date: r.date, title: r.draft.title.trim(), summary: r.draft.summary.trim(), raw: r.raw.trim() });
+    r.loading = true; renderSheet();
+    const saved = await save();
+    r.loading = false;
+    if (!saved) { r.error = '서버에 저장하지 못했어요. 변경 내용은 이 화면에 남아 있어요. 저장 상태를 확인해 주세요.'; renderSheet(); return; }
+    ui.rec = null;
+    $('#sheet').close();
+    ui.insight.data = null;
+    toast('기록을 수정했어요.');
+    render();
+  },
   'go-back': () => { if (history.length > 1) history.back(); else location.hash = '#/dashboard'; },
   'close-sheet': () => closeSheet(),
   'rec-cat': (el) => { ui.rec.category = el.dataset.v; renderSheet(); },
+  'rec-add-cat': () => { ui.rec.addingCat = !ui.rec.addingCat; renderSheet(); $('#new-cat')?.focus(); },
   'rec-back': () => { const r = ui.rec; r.error = ''; r.step = r.step === 'review' && r.questions.length ? 'ask' : 'write'; renderSheet(); },
   'rec-next': async () => {
     const r = ui.rec;
@@ -1077,7 +1198,7 @@ const forms = {
     const name = f.elements.label.value.trim().replace(/^#/, '');
     if (!name) return;
     if (!S.categories.includes(name)) { S.categories.push(name); save(); }
-    if (ui.rec && $('#sheet').open) { ui.rec.category = name; renderSheet(); } else { render(); toast(`'${name}' 카테고리를 추가했어요.`); }
+    if (ui.rec && $('#sheet').open) { ui.rec.category = name; ui.rec.addingCat = false; renderSheet(); } else { render(); toast(`'${name}' 카테고리를 추가했어요.`); }
   },
   'new-group': async (f) => {
     const name = f.elements.label.value.trim();
@@ -1134,9 +1255,14 @@ async function setPref(el) {
   if (key !== 'name' && key !== 'bio') render();
 }
 
+function closeMenus() {
+  document.querySelectorAll('.entry-menu-wrap .menu:not([hidden])').forEach((m) => { m.hidden = true; m.previousElementSibling.setAttribute('aria-expanded', 'false'); });
+}
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenus(); });
 document.addEventListener('click', (ev) => {
+  if (!ev.target.closest('.entry-menu-wrap')) closeMenus();
   const el = ev.target.closest('[data-act]');
-  const writes = ['record', 'pick-day', 'cal-start', 'theme', 'del-cat', 'del-entry', 'rec-save', 'new-group', 'poke', 'reset'];
+  const writes = ['record', 'edit-entry', 'edit-save', 'day-record', 'period', 'cal-start', 'theme', 'del-cat', 'del-entry', 'rec-save', 'new-group', 'poke', 'reset'];
   if (el && writes.includes(el.dataset.act) && !auth.user) {
     toast('기록을 저장하거나 그룹에 참여하려면 Google로 로그인해 주세요.'); location.hash = '#/profile'; return;
   }
@@ -1152,7 +1278,7 @@ document.addEventListener('submit', (ev) => {
 document.addEventListener('input', (ev) => {
   const t = ev.target;
   if (t.dataset.model) setModel(t.dataset.model, t.value);
-  if (t.dataset.pf === 'fontScale') { $('#scale-out').textContent = `${t.value}%`; S.profile.fontScale = Number(t.value); applyPrefs(); }
+  if (t.dataset.search !== undefined) { ui.q = t.value; updateRecords(); }
 });
 document.addEventListener('change', (ev) => { if (ev.target.dataset.pf) setPref(ev.target); });
 $('#cal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); }); // 바깥을 누르면 닫기
