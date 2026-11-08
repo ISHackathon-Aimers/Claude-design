@@ -165,13 +165,13 @@ const durationText = (periods, len) => {
   return len % 30 === 0 ? `${periods * (len / 30)}개월` : `${Math.round(days / 7)}주`;
 };
 
-function entryCard(e, owner = true) {
+function entryCard(e, owner = true, open = false) {
   return `<article class="card entry">
     <div class="entry-meta"><span class="tag-cat">#${esc(e.category)}</span><time datetime="${e.date}">${fmt(e.date)}</time></div>
     <h3>${esc(e.title)}</h3>
     <p>${esc(e.summary)}</p>
     ${e.tags?.length ? `<ul class="tags" aria-label="역량">${e.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
-    ${e.raw ? `<details><summary>원본 보기</summary><div class="raw">
+    ${e.raw ? `<details ${open ? 'open' : ''}><summary>원본 보기</summary><div class="raw">
       <p class="pre">${esc(e.raw)}</p>
       ${(e.qa || []).map((x) => `<p class="qa-q">Q. ${esc(x.q)}</p><p class="pre">${x.a ? esc(x.a) : '<span class="muted">(답변 없음)</span>'}</p>`).join('')}
     </div></details>` : ''}
@@ -213,15 +213,35 @@ function dashboard() {
   const first = S.entries.map((e) => e.date).sort()[0];
   const spanDays = first ? toDay(todayStr()) - toDay(first) : 0;
   const span = spanDays >= 60 ? `${Math.floor(spanDays / 30)}개월` : `${Math.max(1, Math.ceil(spanDays / 7))}주`;
+  const head = (title, href) => `<div class="list-head"><h2>${title}</h2><a class="more" href="${href}">전체 보기 ${icon('next', 16)}</a></div>`;
 
-  const cats = [...new Set([...S.categories, ...S.entries.map((e) => e.category)])];
-  const shown = S.entries.filter((e) => ui.cat === 'all' || e.category === ui.cat).sort((a, b) => b.date.localeCompare(a.date));
-  let list;
-  if (!S.entries.length) list = `<div class="empty"><p>아직 기록이 없어요.<br>첫 한 걸음을 남겨 보세요.</p></div>`;
-  else if (!shown.length) list = '<p class="empty">이 카테고리의 기록이 없어요.</p>';
-  else if (ui.sort === 'cat') list = cats.filter((c) => shown.some((e) => e.category === c))
-    .map((c) => `<h3 class="group-label">#${esc(c)} · ${shown.filter((e) => e.category === c).length}개</h3>${shown.filter((e) => e.category === c).map((e) => entryCard(e)).join('')}`).join('');
-  else list = shown.map((e) => entryCard(e)).join('');
+  // 나의 기록 미리보기: 최근 3개
+  const recent = [...S.entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
+  const recordsBox = `<section class="card">${head('나의 기록', '#/records')}
+    ${recent.length ? `<ul class="mini-list">${recent.map((e) => `<li><a class="mini-row" href="#/entry/${e.id}">
+      <span class="mini-main"><span class="tag-cat">#${esc(e.category)}</span><strong>${esc(e.title)}</strong></span>
+      <time datetime="${e.date}">${fmtMD(e.date)}</time></a></li>`).join('')}</ul>` : '<p class="muted">아직 기록이 없어요. 첫 한 걸음을 남겨 보세요.</p>'}
+  </section>`;
+
+  // 부가 서비스 미리보기: 가장 많이 쌓인 역량 한 줄 + 바로 가기
+  const counts = axisCounts(S.entries);
+  const topAxis = AXES[counts.indexOf(Math.max(...counts))];
+  const tile = (href, ic, label) => `<a class="tile" href="${href}"><span class="nav-ic">${icon(ic, 22)}</span><span>${label}</span></a>`;
+  const servicesBox = `<section class="card">${head('부가 서비스', '#/services')}
+    ${S.entries.length ? `<p class="help">지금까지 가장 많이 쌓인 역량은 <strong class="hl">${topAxis.key}</strong>이에요.</p>` : ''}
+    <div class="tiles">${tile('#/services/interview', 'chat', '면접 예상 질문')}${tile('#/services/match', 'search', '자소서 경험 검색')}${tile('#/services/insight', 'trend', '성장 인사이트')}</div>
+  </section>`;
+
+  // 내 그룹 미리보기: 그룹별 이번 기간 작성 현황
+  const groupsBox = `<section class="card">${head('내 그룹', '#/groups')}
+    ${S.groups.length ? `<ul class="mini-list">${S.groups.map((g) => {
+      const ms = groupMembers(g);
+      const late = ms.filter((m) => !memberStatus(m).done).length;
+      return `<li><a class="mini-row" href="#/groups/${g.id}"><span class="mini-main"><strong>${esc(g.name)}</strong>
+        <small>이번 기간 ${ms.length - late}/${ms.length}명 기록</small></span>
+        ${late ? `<span class="late-badge">미작성 ${late}명</span>` : `<span class="ok-badge">${icon('check', 14)} 모두 완료</span>`}</a></li>`;
+    }).join('')}</ul>` : '<p class="muted">아직 속한 그룹이 없어요.</p>'}
+  </section>`;
 
   return {
     html: `${status}
@@ -230,18 +250,40 @@ function dashboard() {
       <div><strong>${span}</strong><span>기록한 기간</span></div>
       <div><strong>${s.streak}회</strong><span>연속 기록</span></div>
     </section>
-    <section style="display:grid;gap:12px" aria-labelledby="my-records">
-      <div class="list-head"><h2 id="my-records">내 기록</h2>
-        <div class="seg" role="group" aria-label="정렬 방식">
-          <button data-act="sort" data-v="time" aria-pressed="${ui.sort === 'time'}">시간순</button>
-          <button data-act="sort" data-v="cat" aria-pressed="${ui.sort === 'cat'}">카테고리순</button>
-        </div>
-      </div>
-      <div class="chips" role="group" aria-label="카테고리 필터">
-        ${['all', ...cats].map((c) => `<button class="chip" data-act="cat" data-v="${esc(c)}" aria-pressed="${ui.cat === c}">${c === 'all' ? '전체' : `#${esc(c)}`}</button>`).join('')}
-      </div>
-      ${list}
-    </section>`,
+    ${recordsBox}${servicesBox}${groupsBox}`,
+  };
+}
+
+// ───────── 4번 탭: 내 기록 ─────────
+function records() {
+  const cats = [...new Set([...S.categories, ...S.entries.map((e) => e.category)])];
+  const shown = S.entries.filter((e) => ui.cat === 'all' || e.category === ui.cat).sort((a, b) => b.date.localeCompare(a.date));
+  let list;
+  if (!S.entries.length) list = `<div class="empty"><p>아직 기록이 없어요.<br>첫 한 걸음을 남겨 보세요.</p></div>`;
+  else if (!shown.length) list = '<p class="empty">이 카테고리의 기록이 없어요.</p>';
+  else if (ui.sort === 'cat') list = cats.filter((c) => shown.some((e) => e.category === c))
+    .map((c) => `<h3 class="group-label">#${esc(c)} · ${shown.filter((e) => e.category === c).length}개</h3>${shown.filter((e) => e.category === c).map((e) => entryCard(e)).join('')}`).join('');
+  else list = shown.map((e) => entryCard(e)).join('');
+  return {
+    html: `<div class="list-head"><p class="lead">총 ${S.entries.length}개의 경험을 기록했어요.</p>
+      <button class="btn small primary" data-act="record">${icon('plus', 18)} 기록하기</button></div>
+    <div class="list-head"><div class="seg" role="group" aria-label="정렬 방식">
+        <button data-act="sort" data-v="time" aria-pressed="${ui.sort === 'time'}">시간순</button>
+        <button data-act="sort" data-v="cat" aria-pressed="${ui.sort === 'cat'}">카테고리순</button>
+      </div></div>
+    <div class="chips" role="group" aria-label="카테고리 필터">
+      ${['all', ...cats].map((c) => `<button class="chip" data-act="cat" data-v="${esc(c)}" aria-pressed="${ui.cat === c}">${c === 'all' ? '전체' : `#${esc(c)}`}</button>`).join('')}
+    </div>
+    ${list}`,
+  };
+}
+
+// 기록 하나를 크게 보기 (추천 경험·대시보드에서 눌러 들어온다)
+function entryView(id) {
+  const e = S.entries.find((x) => x.id === id);
+  return {
+    title: '기록 보기', back: 'history',
+    html: e ? entryCard(e, true, true) : '<p class="empty">기록을 찾을 수 없어요. 삭제되었을 수 있어요.</p>',
   };
 }
 
@@ -367,9 +409,11 @@ function match() {
     </section>
     ${m.results ? (m.results.length ? `<h2>추천 경험 ${m.results.length}개</h2>${m.results.map((r, i) => {
       const e = S.entries.find((en) => en.id === r.id);
-      return e ? `<article class="card"><span class="eyebrow">추천 ${i + 1} · #${esc(e.category)} · ${fmtW(e.date)}</span><h3>${esc(e.title)}</h3>
+      return e ? `<a class="card match-card" href="#/entry/${e.id}" aria-label="추천 ${i + 1}: ${esc(e.title)} 기록 보기">
+        <span class="eyebrow">추천 ${i + 1} · #${esc(e.category)} · ${fmtW(e.date)}</span><h3>${esc(e.title)}</h3>
         <blockquote class="evidence"><span class="eyebrow">기록 속 근거</span><p>“${esc(r.evidence)}”</p></blockquote>
-        ${r.reason ? `<p class="ai-summary"><strong>추천 이유</strong><br>${esc(r.reason)}</p>` : ''}${r.angle ? `<p class="tip">${esc(r.angle)}</p>` : ''}</article>` : '';
+        ${r.reason ? `<p class="ai-summary"><strong>추천 이유</strong><br>${esc(r.reason)}</p>` : ''}${r.angle ? `<p class="tip">${esc(r.angle)}</p>` : ''}
+        <span class="more">기록 전체 보기 ${icon('next', 16)}</span></a>` : '';
     }).join('')}` : '<p class="empty">이 문항에 근거로 쓸 만한 기록을 찾지 못했어요.<br>관련 경험을 먼저 기록하거나 문항을 바꿔 보세요.</p>') : ''}`,
   };
 }
@@ -384,6 +428,65 @@ function semesters() {
   return [...map.values()];
 }
 
+// 역량 육각형: 기록에 붙은 역량 태그 8개를 6개 축으로 묶는다
+const AXES = [
+  { key: '전공 역량', tags: ['전공 역량'] },
+  { key: '문제 해결', tags: ['문제 해결'] },
+  { key: '협업', tags: ['협업', '갈등 조율'] },
+  { key: '리더십', tags: ['리더십'] },
+  { key: '소통', tags: ['커뮤니케이션'] },
+  { key: '자기주도', tags: ['도전', '성실성'] },
+];
+const axisCounts = (entries) => AXES.map((a) => entries.filter((e) => (e.tags || []).some((t) => a.tags.includes(t))).length);
+
+function radarSvg(now, past) {
+  const cx = 170;
+  const cy = 150;
+  const R = 92;
+  const max = Math.max(1, ...now);
+  const pt = (i, r) => {
+    const a = (-90 + i * 60) * (Math.PI / 180);
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  };
+  const poly = (vals) => vals.map((v, i) => pt(i, (v / max) * R).map((n) => n.toFixed(1)).join(',')).join(' ');
+  const rings = [0.25, 0.5, 0.75, 1].map((f) => `<polygon points="${AXES.map((_, i) => pt(i, R * f).join(',')).join(' ')}" class="r-grid"/>`).join('');
+  const spokes = AXES.map((_, i) => { const [x, y] = pt(i, R); return `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" class="r-grid"/>`; }).join('');
+  const labels = AXES.map((a, i) => {
+    const [x, y] = pt(i, R + 22);
+    const anchor = Math.abs(x - cx) < 4 ? 'middle' : x > cx ? 'start' : 'end';
+    const dy = y < cy - R ? -4 : y > cy + R ? 12 : 4;
+    return `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" text-anchor="${anchor}" class="r-label">${a.key}<tspan class="r-val"> ${now[i]}</tspan></text>`;
+  }).join('');
+  const dots = now.map((v, i) => {
+    const [x, y] = pt(i, (v / max) * R);
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" class="r-dot"><title>${AXES[i].key}: 지금 ${v}개${past ? ` · 지난 학기까지 ${past[i]}개` : ''}</title></circle>`;
+  }).join('');
+  return `<svg viewBox="0 0 340 300" class="radar" role="img" aria-label="역량 육각형 그래프. ${AXES.map((a, i) => `${a.key} ${now[i]}개`).join(', ')}">
+    ${rings}${spokes}
+    ${past ? `<polygon points="${poly(past)}" class="r-past"/>` : ''}
+    <polygon points="${poly(now)}" class="r-now"/>${dots}${labels}</svg>`;
+}
+
+function radarCard(sems) {
+  if (!S.entries.length) return '';
+  const now = axisCounts(S.entries);
+  const before = sems.length > 1 ? S.entries.filter((e) => semesterOf(e.date).key !== sems.at(-1).key) : null;
+  const past = before ? axisCounts(before) : null;
+  const diff = past ? now.map((v, i) => v - past[i]) : null;
+  const best = diff && Math.max(...diff) > 0 ? diff.indexOf(Math.max(...diff)) : -1;
+  return `<section class="card">
+    <h2>나의 역량 육각형</h2>
+    <p class="help">기록마다 붙은 역량을 6가지로 묶어 센 거예요. 바깥으로 넓을수록 그 역량을 보여 주는 경험이 많아요.</p>
+    ${best >= 0 ? `<p class="ai-summary">이번 학기에 가장 많이 자란 역량은 <strong>${AXES[best].key}</strong>예요. 경험 ${diff[best]}개가 새로 쌓였어요.</p>` : ''}
+    ${past ? `<div class="legend" aria-hidden="true"><span><i class="sw now"></i>지금</span><span><i class="sw past"></i>지난 학기까지</span></div>` : ''}
+    ${radarSvg(now, past)}
+    <table class="r-table"><caption class="sr-only">역량별 경험 수</caption>
+      <thead><tr><th scope="col">역량</th><th scope="col">경험</th>${past ? '<th scope="col">이번 학기</th>' : ''}</tr></thead>
+      <tbody>${AXES.map((a, i) => `<tr><th scope="row">${a.key}</th><td>${now[i]}개</td>${past ? `<td class="${diff[i] > 0 ? 'up' : ''}">${diff[i] > 0 ? `+${diff[i]}` : '–'}</td>` : ''}</tr>`).join('')}</tbody>
+    </table>
+  </section>`;
+}
+
 function insight() {
   const sems = semesters();
   const max = Math.max(1, ...sems.map((s) => s.entries.length));
@@ -391,7 +494,7 @@ function insight() {
   const count = (arr) => Object.entries(arr.reduce((m, x) => ((m[x] = (m[x] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]);
   return {
     title: '성장 인사이트', back: '#/services',
-    html: needEntries() || `<section class="card"><h2>나의 대학생활 연대기</h2>
+    html: needEntries() || `${radarCard(sems)}<section class="card"><h2>나의 대학생활 연대기</h2>
       <p class="help">${sems.length}개 학기 동안 ${S.entries.length}개의 경험을 기록했어요.</p>
       <button class="btn primary block" data-act="ins-run" ${ui.insight.loading ? 'disabled' : ''}>${ui.insight.loading ? `${spinner} 분석하는 중…` : `${icon('sparkle')} AI 성장 보고서 받기`}</button></section>
     ${d ? `<section class="card" aria-live="polite"><h2>달라진 점</h2><ul style="margin:0;padding-left:20px;display:grid;gap:6px">${d.growth.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>${d.next_step ? `<p class="tip">${esc(d.next_step)}</p>` : ''}</section>` : ''}
@@ -480,6 +583,7 @@ function profile() {
   const s = myStats();
   const lvl = fireLevel(s.streak);
   return {
+    title: '개인 프로필', back: 'history',
     html: `<section class="profile-top">
       <span class="ring fire-${lvl}">${avatar(me())}</span>
       <label class="btn small secondary" for="pf-photo">${icon('camera', 18)} 사진 변경</label>
@@ -544,6 +648,24 @@ function applyPrefs() {
   root.style.fontSize = `${S.profile.fontScale}%`;
 }
 
+// ───────── 확인창 ─────────
+// 브라우저 기본 confirm()은 앱 안 브라우저·웹뷰에서 막혀 바로 '취소'가 되므로 직접 만든 창을 쓴다
+function ask(message, okLabel = '확인', danger = false) {
+  const d = $('#ask');
+  d.innerHTML = `<form method="dialog"><p id="ask-msg" class="pre">${esc(message)}</p>
+    <div class="ask-foot"><button class="btn secondary" value="no">취소</button><button class="btn ${danger ? 'danger' : 'primary'}" value="ok">${esc(okLabel)}</button></div></form>`;
+  d.returnValue = '';
+  d.showModal();
+  d.querySelector('[value="no"]').focus();
+  return new Promise((resolve) => d.addEventListener('close', () => resolve(d.returnValue === 'ok'), { once: true }));
+}
+
+async function closeSheet() {
+  if (ui.rec?.raw.trim() && !(await ask('작성 중인 내용이 사라져요. 닫을까요?', '닫기'))) return;
+  ui.rec = null;
+  $('#sheet').close();
+}
+
 // ───────── 달력 (기본 날짜 입력 대신 앱 디자인에 맞춘 달력) ─────────
 const cal = { month: '', value: '', max: '', title: '', onPick: null, marks: new Set() };
 function openCalendar({ value, max = '', title, onPick }) {
@@ -599,6 +721,8 @@ function view() {
     return m ? memberView(g, m) : groupDetail(g);
   }
   if (tab === 'profile') return profile();
+  if (tab === 'records') return records();
+  if (tab === 'entry') return entryView(a);
   return dashboard();
 }
 
@@ -606,9 +730,14 @@ let current;
 function renderTop() {
   const v = current || {};
   const badge = ui.demo ? '<span class="badge" title="AI 키 없이 미리 준비한 답변을 보여 줘요">시연 모드</span>' : '';
+  const backBtn = v.back === 'history'
+    ? `<button class="icon-btn" data-act="go-back" aria-label="뒤로">${icon('back', 24)}</button>`
+    : `<a class="icon-btn" href="${v.back}" aria-label="뒤로">${icon('back', 24)}</a>`;
+  // 메인 화면에서는 오른쪽 위 프로필 사진으로 개인 프로필에 들어간다
+  const profileBtn = `<a class="top-avatar" href="#/profile" aria-label="개인 프로필"><span class="ring sm fire-${fireLevel(myStats().streak)}">${avatar(me())}</span></a>`;
   $('#topbar').innerHTML = v.back
-    ? `<a class="icon-btn" href="${v.back}" aria-label="뒤로">${icon('back', 24)}</a><h1>${esc(v.title)}</h1>${badge}`
-    : `<h1 class="logo">AIM<b>ers</b></h1>${badge}`;
+    ? `${backBtn}<h1>${esc(v.title)}</h1>${badge}`
+    : `<h1 class="logo">AIM<b>ers</b></h1>${badge}${profileBtn}`;
 }
 function render(scroll = false) {
   current = view();
@@ -637,12 +766,12 @@ const actions = {
   'cal-pick': (el) => { $('#cal').close(); cal.onPick?.(el.dataset.v); },
   'cal-close': () => $('#cal').close(),
   theme: (el) => { S.profile.theme = el.dataset.v; save(); applyPrefs(); render(); },
-  'del-cat': (el) => {
+  'del-cat': async (el) => {
     const c = el.dataset.v;
     const n = S.entries.filter((e) => e.category === c).length;
     const rest = S.categories.filter((x) => x !== c);
     const target = c !== '기타' ? '기타' : rest[0];
-    if (!rest.length || !confirm(n ? `'${c}' 카테고리를 삭제할까요?\n이 카테고리의 기록 ${n}개는 '${target}'(으)로 옮겨져요.` : `'${c}' 카테고리를 삭제할까요?`)) return;
+    if (!rest.length || !(await ask(n ? `'${c}' 카테고리를 삭제할까요?\n이 카테고리의 기록 ${n}개는 '${target}'(으)로 옮겨져요.` : `'${c}' 카테고리를 삭제할까요?`, '삭제', true))) return;
     S.categories = rest;
     if (n) {
       if (!S.categories.includes(target)) S.categories.push(target);
@@ -653,15 +782,14 @@ const actions = {
   },
   sort: (el) => { ui.sort = el.dataset.v; render(); },
   cat: (el) => { ui.cat = el.dataset.v; render(); },
-  'del-entry': (el) => {
-    if (!confirm('이 기록을 삭제할까요? 되돌릴 수 없어요.')) return;
+  'del-entry': async (el) => {
+    if (!(await ask('이 기록을 삭제할까요?\n되돌릴 수 없어요.', '삭제', true))) return;
     S.entries = S.entries.filter((e) => e.id !== el.dataset.v);
-    save(); render(); toast('기록을 삭제했어요.');
+    save(); toast('기록을 삭제했어요.');
+    if (route()[0] === 'entry') actions['go-back'](); else render();
   },
-  'close-sheet': () => {
-    if (ui.rec?.raw.trim() && !confirm('작성 중인 내용이 사라져요. 닫을까요?')) return;
-    $('#sheet').close();
-  },
+  'go-back': () => { if (history.length > 1) history.back(); else location.hash = '#/dashboard'; },
+  'close-sheet': () => closeSheet(),
   'rec-cat': (el) => { ui.rec.category = el.dataset.v; renderSheet(); },
   'rec-back': () => { const r = ui.rec; r.error = ''; r.step = r.step === 'review' && r.questions.length ? 'ask' : 'write'; renderSheet(); },
   'rec-next': async () => {
@@ -748,8 +876,8 @@ const actions = {
     save(); render();
     toast(`${m.name}님을 콕 찔렀어요. 기록을 독촉하는 알림이 갔어요.`);
   },
-  reset: () => {
-    if (!confirm('모든 기록과 설정을 지우고 시연 데이터로 되돌릴까요?')) return;
+  reset: async () => {
+    if (!(await ask('모든 기록과 설정을 지우고 시연 데이터로 되돌릴까요?', '초기화', true))) return;
     S = seed(); save(); applyPrefs(); ui.insight.data = null; ui.match.results = null;
     ui.interview = { theme: '', questions: [], active: -1, answer: '', feedback: null, loading: '' };
     location.hash = '#/dashboard'; render(true); toast('시연 데이터로 초기화했어요.');
@@ -821,9 +949,7 @@ document.addEventListener('input', (ev) => {
 });
 document.addEventListener('change', (ev) => { if (ev.target.dataset.pf) setPref(ev.target); });
 $('#cal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); }); // 바깥을 누르면 닫기
-$('#sheet').addEventListener('cancel', (ev) => {
-  if (ui.rec?.raw.trim() && !confirm('작성 중인 내용이 사라져요. 닫을까요?')) ev.preventDefault();
-});
+$('#sheet').addEventListener('cancel', (ev) => { ev.preventDefault(); closeSheet(); }); // Esc도 같은 확인을 거친다
 window.addEventListener('hashchange', () => render(true));
 
 applyPrefs();
