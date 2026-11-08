@@ -12,4 +12,5 @@ data/
 .DS_Store
 .vercel/
 public/cloud.bundle.js
+public/payment-sdk.bundle.js
 public/icons/

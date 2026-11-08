@@ -5,6 +5,7 @@ import { JSDOM } from 'jsdom';
 import { defaultProfile, validateState } from './db.js';
 import { sessionManager } from './public/session.js';
 import { pwa } from './public/pwa.js';
+import { payments } from './public/payments.js';
 
 let moduleId = 0;
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -12,9 +13,10 @@ async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); }
   assert.fail('UI did not reach the expected state');
 }
-async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false, plan = 'free', failMembership = false, initialRoute = 'profile', pauseMembership = false, failAiHistory = false } = {}) {
+async function app(t, { failLoad = false, legacy = false, oldLegacy = false, failAuth = false, plan = 'free', failMembership = false, initialRoute = 'profile', pauseMembership = false, failAiHistory = false, enableCheckout = false, confirmStatus = 'PAID', paymentReturn = false } = {}) {
   const html = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
-  const dom = new JSDOM(html, { url: `http://localhost:3000/#/${initialRoute}` });
+  const paymentId = 'aimers-00000000-0000-4000-8000-000000000001';
+  const dom = new JSDOM(html, { url: `http://localhost:3000/${paymentReturn ? `?payment_return=1&paymentId=${paymentId}` : ''}#/${initialRoute}` });
   let releaseMembership;
   const membershipGate = pauseMembership ? new Promise((resolve) => { releaseMembership = resolve; }) : null;
   t.after(() => { releaseMembership?.(); dom.window.close(); });
@@ -39,6 +41,8 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
   let canceled = false;
   let membershipReads = 0;
   let aiHistoryReads = 0;
+  let paymentPrepares = 0; let paymentConfirms = 0; let sdkCalls = 0; let failConfirmation = false;
+  t.mock.method(payments, 'request', async (order) => { sdkCalls++; assert.equal(order.paymentId, paymentId); return { paymentId }; });
   const session = { enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } };
   t.mock.method(sessionManager, 'initialize', async () => { if (failAuth) throw Object.assign(new Error('로그인 복원 실패'), { status: failAuth === 'expired' ? 401 : 503 }); return session; });
   t.mock.method(sessionManager, 'current', async () => session);
@@ -49,8 +53,15 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     profile: { name: 'First Version', bio: '', photo: '', public: true, periodDays: 7, startDate: '2025-09-13', notify: false, font: 'pretendard', fontScale: 90 },
     categories: ['프로젝트'], entries: [{ id: 'old1', date: '2025-10-01', category: '동아리', title: '옛 기록', summary: '요약', raw: '원문', tags: ['협업'], qa: [] }], groups: [], pokes: {} }));
   globalThis.fetch = async (url, options = {}) => {
+    if (url === '/api/payments/prepare' || url === '/api/payments/resume') { paymentPrepares++; return Response.json({ paymentId, totalAmount: 2990, payMethod: 'CARD' }); }
+    if (url === '/api/payments/confirm') {
+      paymentConfirms++;
+      if (failConfirmation) return Response.json({ error: '결제 확인 연결 실패' }, { status: 502 });
+      if (confirmStatus === 'PAID') plan = 'monthly';
+      return Response.json({ paymentId, status: confirmStatus });
+    }
     if (url === '/api/push/test') { testPushes++; return Response.json({ sent: 1, failed: 0, expired: 0 }); }
-    if (url === '/api/membership') { membershipReads++; if (membershipGate) await membershipGate; return failMembership ? Response.json({ error: 'Unavailable' }, { status: 500 }) : Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false }); }
+    if (url === '/api/membership') { membershipReads++; if (membershipGate) await membershipGate; return failMembership ? Response.json({ error: 'Unavailable' }, { status: 500 }) : Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: enableCheckout }); }
     if (url === '/api/membership/cancel') { canceled = true; return Response.json({ premium: plan !== 'free', plan, currentPeriodEnd: new Date(Date.now() + 86400000 * 30).toISOString(), cancelAtPeriodEnd: canceled, checkoutEnabled: false }); }
     if (url === '/api/auth/session') return Response.json({ enabled: true, user: { id: 'internal-id', googleSub: 'google-user', name: 'Google User', email: 'user@example.com' } });
     if (url === '/api/ai/history') { aiHistoryReads++; return failAiHistory ? Response.json({ error: 'History unavailable' }, { status: 503 }) : Response.json({ runs: [{ task: 'followup', result: { data: {} } }] }); }
@@ -82,6 +93,7 @@ async function app(t, { failLoad = false, legacy = false, oldLegacy = false, fai
     field.value = name; field.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   }
   return { dom, changeName, writes, get state() { return state; }, get reads() { return reads; }, get testPushes() { return testPushes; },
+    get paymentPrepares() { return paymentPrepares; }, get paymentConfirms() { return paymentConfirms; }, get sdkCalls() { return sdkCalls; }, failConfirmation: (value) => { failConfirmation = value; }, setPaymentStatus: (value) => { confirmStatus = value; },
     releaseMembership, get membershipReads() { return membershipReads; }, get aiHistoryReads() { return aiHistoryReads; },
     offline: (value) => { failSave = value; }, conflict: () => { stale = true; },
     pauseNextSave: () => { let release; pause = new Promise((resolve) => { release = resolve; }); return () => release(); },
@@ -177,25 +189,67 @@ test('UI: free users see pricing on every AIMers+ route and retain profile editi
     assert.equal(document.querySelector('[data-act="ins-run"]'), null);
   }
   document.querySelector('[data-act="plan-interest"]').click(); await tick();
-  assert.match(document.querySelector('#ask').textContent, /결제가 진행되거나 요금제가 변경되지 않아요/);
+  assert.match(document.querySelector('#ask').textContent, /결제 서비스를 준비 중/);
   assert.ok(document.querySelector('.premium-hero'));
   location.hash = '#/profile';
   await until(() => document.querySelector('#pf-name'));
   assert.equal(document.querySelector('#pf-name').disabled, false);
 });
 
-test('UI: premium members can schedule cancellation and keep their tools', async (t) => {
+test('UI: premium passes show expiration without renewal or cancellation language and retain tools', async (t) => {
   await app(t, { plan: 'annual' });
   assert.match(document.querySelector('.membership-card').textContent, /AIMers\+ 연간/);
-  document.querySelector('[data-act="plan-cancel"]').click();
-  await until(() => document.querySelector('.membership-card').textContent.includes('해지 예약됨'));
   assert.equal(document.querySelector('[data-act="plan-cancel"]'), null);
+  assert.doesNotMatch(document.querySelector('#main').textContent, /자동|갱신|해지|관리자가 부여/);
   location.hash = '#/services';
   await until(() => document.querySelector('.svc[href="#/services/interview"]'));
   assert.equal(document.querySelector('.premium-hero'), null);
   location.hash = '#/services/interview';
   await until(() => document.querySelector('#topbar h1').textContent === '면접 예상 질문');
   assert.equal(document.querySelector('.premium-hero'), null);
+});
+
+test('UI: one-time checkout prevents double clicks and grants access only after server confirmation', async (t) => {
+  const a = await app(t, { enableCheckout: true, initialRoute: 'services' });
+  await until(() => document.querySelector('[data-act="plan-interest"]:not(:disabled)'));
+  const button = document.querySelector('[data-act="plan-interest"]');
+  button.click(); button.click();
+  await until(() => document.querySelector('.svc'));
+  assert.equal(a.paymentPrepares, 1); assert.equal(a.sdkCalls, 1); assert.equal(a.paymentConfirms, 1);
+  assert.equal(localStorage.getItem('aimers-payment:internal-id'), null);
+});
+
+test('UI: lost confirmation keeps an owner-scoped recovery token and retry never creates another charge', async (t) => {
+  const a = await app(t, { enableCheckout: true, initialRoute: 'services' });
+  a.failConfirmation(true);
+  await until(() => document.querySelector('[data-act="plan-interest"]:not(:disabled)'));
+  document.querySelector('[data-act="plan-interest"]').click();
+  await until(() => document.querySelector('[data-act="payment-retry"]'));
+  assert.ok(localStorage.getItem('aimers-payment:internal-id'));
+  assert.ok(document.querySelector('.premium-hero'));
+  a.failConfirmation(false);
+  document.querySelector('[data-act="payment-retry"]').click();
+  await until(() => document.querySelector('.svc'));
+  assert.equal(a.sdkCalls, 1); assert.equal(a.paymentPrepares, 1); assert.equal(a.paymentConfirms, 2);
+});
+
+test('UI: mobile redirect verifies payment, cleans return parameters and updates membership', async (t) => {
+  const a = await app(t, { enableCheckout: true, paymentReturn: true });
+  await until(() => document.querySelector('.membership-card')?.textContent.includes('AIMers+ 월간'));
+  assert.equal(a.paymentConfirms, 1); assert.equal(a.sdkCalls, 0);
+  assert.equal(location.search, ''); assert.equal(location.hash, '#/profile');
+});
+
+test('UI: closing an unpaid checkout can resume the same order without losing the selected purchase', async (t) => {
+  const a = await app(t, { enableCheckout: true, initialRoute: 'services', confirmStatus: 'PENDING' });
+  await until(() => document.querySelector('[data-act="plan-interest"]:not(:disabled)'));
+  document.querySelector('[data-act="plan-interest"]').click();
+  await until(() => document.querySelector('[data-act="payment-resume"]'));
+  assert.ok(document.querySelector('.premium-hero'));
+  a.setPaymentStatus('PAID');
+  document.querySelector('[data-act="payment-resume"]').click();
+  await until(() => document.querySelector('.svc'));
+  assert.equal(a.sdkCalls, 2);
 });
 
 test('UI: unavailable membership fails closed without blocking the free diary', async (t) => {

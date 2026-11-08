@@ -72,9 +72,10 @@ Google OAuth가 Internal이면 해당 Google 조직의 계정만 로그인할 �
 | `app_groups`, `app_memberships` | 그룹, 초대 코드, 실제 사용자 멤버십 |
 | `app_pokes` | 5분 간격의 콕 찌르기와 수신자의 앱 내 알림 읽음 상태 |
 | `app_ai_runs` | AI 입력과 결과, 최근 활동 조회 |
-| `app_subscriptions` | 관리자 부여 프리미엄 이용권, 이용 기간, 해지 예약 |
+| `app_subscriptions` | 관리자 부여 프리미엄 이용권과 이용 기간 |
+| `app_payment_orders` | 포트원 결제 주문, 검증 상태와 이용 기간 |
 
-AIMers+ 권한 제어에는 `supabase/migrations/202611080004_premium_membership.sql`을 추가 적용합니다. 월간 2,990원, 연간 29,900원이며 현재 실제 결제는 연결하지 않습니다. 특정 가입자에게 이메일로 이용권을 부여하거나 회수하는 SQL은 [프리미엄 설정 안내](docs/premium-membership.md)에 있습니다.
+AIMers+는 포트원 V2 카드 결제로 1개월 2,990원, 1년 29,900원 이용권을 구매할 수 있습니다. 기존 006까지 적용한 뒤 `supabase/migrations/202611080007_payment_passes.sql`과 환경변수 설정이 필요합니다. 설정 전에는 결제를 진행하지 않습니다. [포트원 결제 설정](docs/portone-payments.md)과 [관리자 이용권 설정](docs/premium-membership.md)을 확인하세요.
 
 개인 기록은 사용자별 RLS로 보호합니다. 그룹과 AI 이력 테이블은 클라이언트의 직접 접근을 막고, 로그인 사용자와 멤버십을 검사하는 DB 함수를 통해서만 처리합니다. 비공개 기록의 원문은 그룹 멤버에게도 반환하지 않습니다. 그룹 탈퇴 시 공유 접근을 종료하고 소유자를 다음 멤버로 넘기거나 빈 그룹을 삭제합니다.
 

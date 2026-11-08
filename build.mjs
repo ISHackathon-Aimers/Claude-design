@@ -15,3 +15,8 @@ await build({
   minify: true,
   legalComments: 'eof',
 });
+
+await build({
+  entryPoints: ['public/payment-sdk.js'], outfile: 'public/payment-sdk.bundle.js',
+  bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: true, legalComments: 'eof',
+});

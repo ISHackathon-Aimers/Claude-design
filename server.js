@@ -8,6 +8,7 @@ import { handleAuth, publicConfig } from './auth.js';
 import { getStore } from './supabase-db.js';
 import { pushService, validateSubscription } from './push.js';
 import { PREMIUM_TASKS, hasPremium } from './public/plans.js';
+import { paymentService } from './payments.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const MAX_BODY = 3_500_000;
@@ -51,10 +52,30 @@ async function readJson(req) {
   }
 }
 
-export function createHandler({ auth = handleAuth, store = getStore, aiTask = runTask, push = pushService } = {}) {
+export async function readPaymentWebhook(req) {
+  // Read the untouched stream before accessing Vercel's lazy req.body parser.
+  if (req[Symbol.asyncIterator]) {
+    const chunks = []; let size = 0;
+    for await (const chunk of req) {
+      size += Buffer.byteLength(chunk);
+      if (size > 100_000) throw Object.assign(new Error('웹훅 크기를 초과했습니다.'), { status: 413 });
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
+  const raw = req.rawBody ?? req.body;
+  if ((!Buffer.isBuffer(raw) && typeof raw !== 'string') || Buffer.byteLength(raw) > 100_000) throw Object.assign(new Error('웹훅 원문이 필요합니다.'), { status: 400 });
+  return raw.toString();
+}
+
+export function createHandler({ auth = handleAuth, store = getStore, aiTask = runTask, push = pushService, payments = paymentService } = {}) {
 return async function handle(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/api/payments/webhook') {
+      if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+      return send(res, 200, await payments.webhook(await readPaymentWebhook(req), req.headers));
+    }
     if (url.pathname === '/api/push/config') {
       if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
       return send(res, 200, push.config());
@@ -86,11 +107,26 @@ return async function handle(req, res) {
       }
       if (url.pathname === '/api/membership') {
         if (req.method !== 'GET') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
-        return send(res, 200, await db.membership(user.id));
+        return send(res, 200, { ...await db.membership(user.id), checkoutEnabled: payments.config().enabled });
       }
       if (url.pathname === '/api/membership/cancel') {
         if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
-        return send(res, 200, await db.cancelMembership(user.id));
+        return send(res, 409, { error: '이용권은 표시된 이용 기간까지 사용할 수 있어요.' });
+      }
+      if (url.pathname === '/api/payments/prepare') {
+        if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+        const body = await readJson(req);
+        return send(res, 200, await payments.prepare(user, body.plan));
+      }
+      if (url.pathname === '/api/payments/confirm') {
+        if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+        const body = await readJson(req);
+        return send(res, 200, await payments.confirm(user, body.paymentId));
+      }
+      if (url.pathname === '/api/payments/resume') {
+        if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });
+        const body = await readJson(req);
+        return send(res, 200, await payments.resume(user, body.paymentId));
       }
       if (url.pathname === '/api/push/subscription') {
         if (req.method !== 'POST') return send(res, 405, { error: '허용되지 않는 요청입니다.' });

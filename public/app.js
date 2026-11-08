@@ -3,12 +3,14 @@ import { sessionManager } from './session.js';
 import { pwa } from './pwa.js';
 import { createSaveFeedback, loadingMarkup } from './feedback.js';
 import { PLANS, PREMIUM_TASKS, hasPremium } from './plans.js';
+import { payments } from './payments.js';
 pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
 const KEY = 'aimers-v1';
 const auth = { loading: true, enabled: false, user: null, error: '', busy: false, restoreError: false };
 const membership = { data: null, loading: false, error: '', busy: false, generation: 0 };
+const checkout = { busy: false, error: '', pendingId: '' };
 const sync = { ready: false, revision: 0, generation: 0, pending: null, saving: null, error: '', conflict: false };
 let legacyState = null;
 let lastDataCheck = 0;
@@ -167,11 +169,68 @@ const planDate = (value) => new Date(value).toLocaleDateString('ko-KR', { year: 
 
 function planOptions() {
   return `<div class="plan-options" aria-label="프리미엄 요금 안내">${Object.entries(PLANS).map(([key, plan]) => `<article class="plan-option${key === 'annual' ? ' recommended' : ''}">
-    <span class="eyebrow">${plan.name} 요금제</span>${key === 'annual' ? '<span class="plan-saving">연 5,980원 절약</span>' : ''}
-    <p class="plan-price">${plan.label}<small> / ${plan.period}</small></p>
-    <p class="help">${key === 'annual' ? '연간 요금 29,900원' : '월간 요금 2,990원'}</p>
-    <button class="btn ${key === 'annual' ? 'primary' : 'secondary'} block" data-act="plan-interest" data-v="${key}" ${membership.busy ? 'disabled' : ''}>${plan.name} 이용 안내</button>
-  </article>`).join('')}</div><p class="help billing-notice">현재 결제 연결을 준비 중이에요. 아직 결제하거나 자동 갱신하지 않아요.</p>`;
+    <span class="eyebrow">${key === 'annual' ? '1년' : '1개월'} 이용권</span>${key === 'annual' ? '<span class="plan-saving">연 5,980원 절약</span>' : ''}
+    <p class="plan-price">${plan.label}</p>
+    <p class="help">${key === 'annual' ? '1년' : '1개월'} 이용 금액</p>
+    <button class="btn ${key === 'annual' ? 'primary' : 'secondary'} block" data-act="plan-interest" data-v="${key}" ${checkout.busy || membership.loading || membership.error || checkout.pendingId ? 'disabled' : ''}>${checkout.busy ? '결제 확인 중...' : `${key === 'annual' ? '1년' : '1개월'} 이용권 구매`}</button>
+  </article>`).join('')}</div><p class="help billing-notice">선택한 이용 기간에 대한 금액을 한 번 결제해요.</p>${paymentNotice()}`;
+}
+
+function paymentNotice() {
+  return `${checkout.busy ? '<p class="help" role="status">결제 결과를 확인하고 있어요.</p>' : ''}${checkout.error ? `<p class="error" role="alert">${esc(checkout.error)}</p>` : ''}${checkout.pendingId && !checkout.busy ? '<button class="btn secondary block" data-act="payment-retry">결제 결과 다시 확인하기</button><button class="btn secondary block" data-act="payment-resume">같은 주문으로 결제 다시 진행하기</button>' : ''}`;
+}
+
+const paymentStorageKey = () => `aimers-payment:${auth.user?.id}`;
+function rememberPayment(id) {
+  checkout.pendingId = id;
+  try { if (id) localStorage.setItem(paymentStorageKey(), id); else localStorage.removeItem(paymentStorageKey()); } catch { /* Webhooks still settle closed browsers. */ }
+}
+async function confirmPayment(id) {
+  const result = await api('/api/payments/confirm', { method: 'POST', body: { paymentId: id } });
+  if (['PAID', 'PARTIAL_REFUNDED'].includes(result.status)) {
+    rememberPayment(''); checkout.error = '';
+    await refreshMembership();
+    toast('결제를 확인했어요. 이용권이 반영됐어요.');
+  } else if (['FAILED', 'REFUNDED'].includes(result.status)) {
+    rememberPayment('');
+    checkout.error = result.status === 'REFUNDED' ? '취소된 결제예요.' : '결제가 완료되지 않았어요. 다시 구매할 수 있어요.';
+  } else checkout.error = '아직 결제가 완료되지 않았어요. 결제 후 다시 확인해 주세요.';
+}
+async function retryPayment() {
+  if (checkout.busy || !auth.user || !checkout.pendingId) return;
+  checkout.busy = true; checkout.error = ''; render();
+  try { await confirmPayment(checkout.pendingId); }
+  catch (error) { if ([400, 404].includes(error.status)) rememberPayment(''); checkout.error = error.message; }
+  finally { checkout.busy = false; render(); }
+}
+async function buyPass(key) {
+  if (checkout.busy || checkout.pendingId || !Object.hasOwn(PLANS, key)) return;
+  if (!auth.user) { toast('로그인한 뒤 이용권을 구매해 주세요.'); location.hash = '#/profile'; return; }
+  if (!membership.data?.checkoutEnabled) { await ask('결제 서비스를 준비 중이에요. 잠시 후 다시 확인해 주세요.', '확인'); return; }
+  checkout.busy = true; checkout.error = ''; render();
+  try {
+    const order = await api('/api/payments/prepare', { method: 'POST', body: { plan: key } });
+    rememberPayment(order.paymentId);
+    const result = await payments.request(order);
+    if (result?.code) {
+      // A canceled payment window does not prove the server-side payment failed.
+      await confirmPayment(order.paymentId);
+      if (checkout.pendingId) checkout.error = '결제창이 닫혔어요. 결제 결과를 확인해 주세요.';
+    } else await confirmPayment(order.paymentId);
+  } catch (error) { checkout.error = error.message || '결제를 진행하지 못했어요. 다시 확인해 주세요.'; }
+  finally { checkout.busy = false; render(); }
+}
+async function recoverPayment() {
+  if (!auth.user || !sync.ready) return;
+  const url = new URL(location.href);
+  const returned = url.searchParams.has('payment_return');
+  let id = returned ? url.searchParams.get('paymentId') : null;
+  if (!id) { try { id = localStorage.getItem(paymentStorageKey()); } catch { /* Optional recovery cache. */ } }
+  if (returned) {
+    for (const key of ['payment_return', 'paymentId', 'transactionType', 'txId', 'code', 'message']) url.searchParams.delete(key);
+    history.replaceState(null, '', `${url.pathname}${url.search}#/profile`);
+  }
+  if (id && /^aimers-[a-f0-9-]{36}$/.test(id)) { rememberPayment(id); await retryPayment(); }
 }
 
 function membershipCard() {
@@ -181,12 +240,11 @@ function membershipCard() {
   const active = premium(); const data = membership.data;
   return `<section class="card membership-card" aria-labelledby="plan-title"><div class="membership-heading"><h2 id="plan-title">나의 요금제</h2><span class="plan-badge">${active ? 'PREMIUM' : 'FREE'}</span></div>
     <p class="membership-name">${active ? `AIMers+ ${PLANS[data.plan].name}` : 'AIMers 무료'}</p>
-    ${active ? `<dl class="membership-details"><div><dt>요금 안내</dt><dd>${PLANS[data.plan].label} / ${PLANS[data.plan].period}</dd></div><div><dt>이용 가능 기간</dt><dd>${esc(planDate(data.currentPeriodEnd))}까지</dd></div><div><dt>이용 상태</dt><dd>${data.cancelAtPeriodEnd ? '해지 예약됨' : '프리미엄 이용 중'}</dd></div></dl>
-      <p class="help">${data.cancelAtPeriodEnd ? '남은 기간에는 AIMers+를 계속 이용할 수 있어요. 기간이 끝나면 무료 요금제로 전환돼요.' : '관리자가 부여한 이용권이에요. 실제 결제나 자동 갱신은 없어요.'}</p>
-      <a class="btn secondary block" href="#/services">AIMers+ 이용하기</a>
-      ${!data.cancelAtPeriodEnd ? `<button class="btn secondary block" data-act="plan-cancel" aria-busy="${membership.busy}" ${membership.busy ? 'disabled' : ''}>${membership.busy ? `${spinner} 해지를 예약하고 있어요` : '요금제 해지하기'}</button>` : ''}`
+    ${active ? `<dl class="membership-details"><div><dt>이용권 금액</dt><dd>${PLANS[data.plan].label}</dd></div><div><dt>이용 가능 기간</dt><dd>${esc(planDate(data.currentPeriodEnd))}까지</dd></div><div><dt>이용 상태</dt><dd>프리미엄 이용 중</dd></div></dl>
+      <p class="help">표시된 기간까지 AIMers+를 이용할 수 있어요.</p>
+      <a class="btn secondary block" href="#/services">AIMers+ 이용하기</a>`
       : '<p class="help">경험 기록, AI 기록 정리, 그룹은 계속 무료로 이용할 수 있어요.</p><a class="btn primary block" href="#/services">프리미엄 알아보기</a>'}
-    <button class="btn secondary block" data-act="plan-refresh" ${membership.busy ? 'disabled' : ''}>요금제 새로 확인하기</button></section>`;
+    ${paymentNotice()}<button class="btn secondary block" data-act="plan-refresh" ${membership.busy || checkout.busy ? 'disabled' : ''}>요금제 새로 확인하기</button></section>`;
 }
 
 function premiumWelcome() {
@@ -1069,21 +1127,17 @@ const actions = {
     finally { pwa.state.busy = false; render(); }
   },
   'plan-refresh': async () => { if (membership.loading || membership.busy) return; const pending = refreshMembership(); render(); await pending; render(); },
-  'plan-interest': async (el) => {
-    const plan = PLANS[el.dataset.v]; if (!plan) return;
-    await ask(`${plan.name} 요금제는 ${plan.period === '월' ? '월' : '연'} ${plan.label}이에요. 현재 결제 연결을 준비 중이에요. 결제가 진행되거나 요금제가 변경되지 않아요.`, '확인');
-  },
-  'plan-cancel': async () => {
-    if (membership.busy || !premium()) return;
-    membership.busy = true; membership.generation++; membership.loading = false;
+  'plan-interest': (el) => buyPass(el.dataset.v),
+  'payment-retry': retryPayment,
+  'payment-resume': async () => {
+    if (checkout.busy || !auth.user || !checkout.pendingId) return;
+    checkout.busy = true; checkout.error = ''; render();
     try {
-      const confirmed = await ask(`요금제 해지를 예약할까요? ${planDate(membership.data.currentPeriodEnd)}까지 이용할 수 있고 이후 무료 요금제로 전환돼요.`, '해지 예약', true);
-      if (!confirmed) return;
-      render();
-      membership.data = await api('/api/membership/cancel', { method: 'POST', body: {} }); membership.error = '';
-      toast(membership.data.cancelAtPeriodEnd ? '해지를 예약했어요. 남은 기간은 계속 이용할 수 있어요.' : '현재 무료 요금제예요.');
-    } catch (error) { toast(error.message); }
-    finally { membership.busy = false; render(); }
+      const order = await api('/api/payments/resume', { method: 'POST', body: { paymentId: checkout.pendingId } });
+      await payments.request(order);
+      await confirmPayment(order.paymentId);
+    } catch (error) { if ([400, 404].includes(error.status)) rememberPayment(''); checkout.error = error.message; }
+    finally { checkout.busy = false; render(); }
   },
   'retry-auth': () => location.reload(),
   'pwa-install': async () => { try { await pwa.install(); } catch { toast('브라우저의 설치 메뉴를 사용해 주세요.'); } },
@@ -1485,7 +1539,7 @@ async function initAuth() {
 
 let resumingSession = false;
 async function resumeSession() {
-  if (auth.loading || auth.restoreError || resumingSession || membership.busy || $('#ask').open || document.visibilityState === 'hidden') return;
+  if (auth.loading || auth.restoreError || resumingSession || membership.busy || checkout.busy || $('#ask').open || document.visibilityState === 'hidden') return;
   resumingSession = true;
   try {
     const session = await sessionManager.current();
@@ -1517,6 +1571,7 @@ window.addEventListener('beforeunload', (ev) => {
 });
 
 await initAuth();
+await recoverPayment();
 void pwa.start(api, auth.user, () => {
   const slot = $('#pwa-slot');
   if (slot) slot.innerHTML = pwaCard();
