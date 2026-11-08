@@ -5,6 +5,7 @@ import { createSaveFeedback, loadingMarkup } from './feedback.js';
 import { PLANS, PREMIUM_TASKS, hasPremium } from './plans.js';
 import { payments } from './payments.js';
 import { defaultAvatar } from './avatars.js';
+import { openPaymentPreview } from './payment-preview.js';
 pwa.listen();
 
 // 로그인 사용자의 영구 데이터는 서버 DB에 저장한다. 게스트 시연 데이터는 메모리에서만 사용한다.
@@ -174,6 +175,7 @@ function planOptions() {
     <p class="plan-price">${plan.label}</p>
     <p class="help">${key === 'annual' ? '1년' : '1개월'} 이용 금액</p>
     <button class="btn ${key === 'annual' ? 'primary' : 'secondary'} block" data-act="plan-interest" data-v="${key}" ${checkout.busy || membership.loading || membership.error || checkout.pendingId ? 'disabled' : ''}>${checkout.busy ? '결제 확인 중...' : `${key === 'annual' ? '1년' : '1개월'} 이용권 구매`}</button>
+    ${!membership.data?.checkoutEnabled ? `<button class="btn secondary block" data-act="payment-preview" data-v="${key}">결제 흐름 미리보기</button>` : ''}
   </article>`).join('')}</div><p class="help billing-notice">선택한 이용 기간에 대한 금액을 한 번 결제해요.</p>${paymentNotice()}`;
 }
 
@@ -1131,6 +1133,7 @@ const actions = {
   },
   'plan-refresh': async () => { if (membership.loading || membership.busy) return; const pending = refreshMembership(); render(); await pending; render(); },
   'plan-interest': (el) => buyPass(el.dataset.v),
+  'payment-preview': (el) => { if (!checkout.busy) openPaymentPreview(el.dataset.v); },
   'payment-retry': retryPayment,
   'payment-resume': async () => {
     if (checkout.busy || !auth.user || !checkout.pendingId) return;

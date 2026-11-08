@@ -235,6 +235,30 @@ test('UI: premium passes show expiration without renewal or cancellation languag
   assert.equal(document.querySelector('.premium-hero'), null);
 });
 
+test('UI: payment preview shows success, failure and cancel without charging or changing membership', async (t) => {
+  const a = await app(t, { initialRoute: 'services' });
+  await until(() => document.querySelector('[data-act="payment-preview"][data-v="annual"]'));
+  const opener = document.querySelector('[data-act="payment-preview"][data-v="annual"]');
+  opener.focus(); opener.click();
+  const dialog = document.querySelector('#payment-preview');
+  assert.equal(dialog.open, true);
+  assert.match(dialog.textContent, /시연 모드/);
+  assert.match(dialog.textContent, /29,900원/);
+  assert.equal(dialog.querySelector('input'), null);
+  for (const result of ['success', 'failure', 'cancel']) {
+    dialog.querySelector(`[data-preview="${result}"]`).click();
+    assert.match(dialog.textContent, /시연/);
+    assert.ok(dialog.contains(document.activeElement));
+    dialog.querySelector('[data-preview="checkout"]').click();
+  }
+  dialog.querySelector('[data-preview="close"]').click();
+  assert.equal(document.querySelector('#payment-preview'), null);
+  assert.equal(document.activeElement, opener);
+  assert.equal(a.paymentPrepares, 0); assert.equal(a.paymentConfirms, 0); assert.equal(a.sdkCalls, 0);
+  assert.equal(a.writes.length, 0);
+  assert.ok(document.querySelector('.premium-hero'));
+});
+
 test('UI: one-time checkout prevents double clicks and grants access only after server confirmation', async (t) => {
   const a = await app(t, { enableCheckout: true, initialRoute: 'services' });
   await until(() => document.querySelector('[data-act="plan-interest"]:not(:disabled)'));
